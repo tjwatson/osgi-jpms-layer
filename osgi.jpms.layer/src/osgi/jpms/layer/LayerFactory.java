@@ -16,9 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.eclipse.equinox.module.layer;
+package osgi.jpms.layer;
 
-import java.io.IOException;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
 import java.lang.reflect.Layer;
@@ -36,7 +35,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-import org.eclipse.equinox.module.layer.reads.ReadsModifier;
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleReference;
@@ -48,6 +46,8 @@ import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.resource.Namespace;
 import org.osgi.resource.Requirement;
 import org.osgi.resource.Resource;
+
+import osgi.jpms.layer.reads.ReadsModifier;
 
 public class LayerFactory {
 
@@ -131,7 +131,7 @@ public class LayerFactory {
 		} catch (URISyntaxException e) {
 			throw new RuntimeException(e);
 		}
-		Map<String, URI> additions = Collections.singletonMap("org/eclipse/equinox/module/layer/reads/ReadsModifier.class", readsModifierURI);
+		Map<String, URI> additions = Collections.singletonMap("osgi/jpms/layer/reads/ReadsModifier.class", readsModifierURI);
 
 		ModuleFinder finder = ModuleFinder.of(modulesPath);
 		// the augment finder augments each module content with the additions

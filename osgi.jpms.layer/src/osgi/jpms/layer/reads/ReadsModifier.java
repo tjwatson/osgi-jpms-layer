@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.eclipse.equinox.module.layer.reads;
+package osgi.jpms.layer.reads;
 
 import java.lang.reflect.Module;
 
