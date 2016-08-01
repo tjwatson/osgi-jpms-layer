@@ -62,7 +62,8 @@ public class Activator implements BundleActivator {
 
 	private void tryLoadClass(Layer layer, String moduleName, String className) {
 		try {
-			System.out.println("SUCCESS: " + layer.findLoader(moduleName).loadClass(className));
+			Class c = layer.findLoader(moduleName).loadClass(className);
+			System.out.println("SUCCESS: " + c + " from->" + c.getModule());
 		} catch (Throwable t) {
 			System.out.println("FAILED: " + t.getMessage());
 		}
