@@ -9,6 +9,7 @@ Also needed is a patched equinox launcher project (org.eclipse.equinox.launcher)
 
 
 [1] https://marketplace.eclipse.org/content/java-9-support-beta-neon
+
 [2] https://github.com/tjwatson/rt.equinox.framework/tree/tjwatson/jpms
 
 # Setup
