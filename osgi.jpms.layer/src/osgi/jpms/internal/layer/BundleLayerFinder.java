@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package osgi.jpms.layer;
+package osgi.jpms.internal.layer;
 
 import java.io.IOException;
 import java.lang.module.ModuleDescriptor;
@@ -26,21 +26,37 @@ import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 
+import org.osgi.framework.Bundle;
+import org.osgi.framework.Constants;
+import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
+import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 
+/**
+ * A module finder that represents the wirings of bundles as modules
+ *
+ */
 public class BundleLayerFinder implements ModuleFinder {
 	private final Map<String, ModuleReference> moduleReferences;
 
+	/**
+	 * Creates a module finder for finding module references that represent
+	 * resolved bundles
+	 * @param wirings a mapping of module names to bundle wirings.  The bundle
+	 * wiring will be used to back a module with a name of the key value.
+	 */
 	public BundleLayerFinder(Map<String, BundleWiring> wirings) {
 		moduleReferences = new HashMap<>();
 		for (Map.Entry<String, BundleWiring> wiringEntry : wirings.entrySet()) {
@@ -58,15 +74,59 @@ public class BundleLayerFinder implements ModuleFinder {
 			// we only care about non-internal and non-friends-only packages
 			if (packageCap.getDirectives().get("x-internal") == null && packageCap.getDirectives().get("x-friends") == null) {
 				String packageName = (String) packageCap.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE);
-				if (packageCap.getRevision().getBundle().getBundleId() == 0) {
-					// only provide packages actually included in the impl (here we hack eclipse package names)
-					if (packageName.startsWith("org.eclipse.") || packageName.startsWith("org.osgi.")) {
-						builder.exports(packageName);
-					}
-				} else {
+				try {
 					builder.exports(packageName);
+				} catch (IllegalStateException e) {
+					// ignore duplicates
 				}
 			}
+		}
+		// Look for private packages.  Each private package needs to be known
+		// to the JPMS otherwise the classes in them will be associated with the
+		// unknown module.  For now use the Private-Package header, should also do some
+		// scanning of the bundle when they don't have this header.
+		// TODO JPMS-ISSUE-002: (Low Priority) Can the Layer API be enhanced to map a classloader to a default module to use? 
+		String privatePackage = wiringEntry.getValue().getBundle().getHeaders("").get("Private-Package");
+		if (privatePackage != null) {
+			for (String pkg : privatePackage.split(",")) {
+				try {
+					// TODO JPMS-ISSUE-001: (High Priority) These must be exported according to JPMS.  Otherwise they cannot be reflected on.
+					// Either relax rules on reflecting in private types or enhance module declaration to say the package is only for reflection purposes
+					builder.exports(pkg.trim());
+				} catch (IllegalStateException e) {
+					// ignore duplicates
+				}
+			}
+		}
+
+		// TODO JPMS-ISSUE-003: (Medium Priority) Have to make JPMS aware of the OSGi delegation for class loading
+		// This is necessary so the OSGi bundle modules get read access granted for the bundle
+		// modules they depend on.  Otherwise errors occur when loading class from imported packages.
+		// Can the Layer API be enhanced so another module framework can addReads itself?
+		
+		// TODO JPMS-ISSUE-004: (High Priority) No bundle cycles allowed since we have to give a representation of the OSGi
+		// class loader delegation to JPMS this means the OSGi class loader graph cannot contain cycles.
+		// Can the Layer impl be enhanced to allow cycles.
+
+		// TODO JPMS-ISSUE-005: (High Priority) the JPMS resolution graph is static once a layer is created
+		// This means dynamic imports in OSGi will not work unless the importing bundle module already has
+		// read access to the module providing the package being dynamically imported.
+		
+		// look for hosts that provide capabilities that effect class loading
+		Set<String> requires = new HashSet<>();
+		List<BundleWire> classLoadingWires = new ArrayList<>();
+		classLoadingWires.addAll(wiringEntry.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE));
+		classLoadingWires.addAll(wiringEntry.getValue().getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE));
+		for (BundleWire bundleWire : classLoadingWires) {
+			Bundle b = bundleWire.getProviderWiring().getBundle();
+			if (b.getBundleId() != 0) {
+				requires.add(b.getSymbolicName());
+			}
+		}
+		// always add the system.bundle module
+		requires.add(Constants.SYSTEM_BUNDLE_SYMBOLICNAME);
+		for (String required : requires) {
+			builder.requires(required);
 		}
 		return new ModuleReference(builder.build(), null, () -> {return getReader(wiringEntry.getValue());});
 	}

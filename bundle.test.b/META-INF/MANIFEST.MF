@@ -4,6 +4,8 @@ Bundle-Name: A
 Bundle-SymbolicName: bundle.test.b
 Bundle-Version: 1.0.0.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-9
-Import-Package: org.osgi.framework;version="1.3.0"
-Bundle-ActivationPolicy: lazy
+Import-Package: bundle.test.a,
+ org.osgi.framework;version="1.3.0"
 Export-Package: bundle.test.b
+Bundle-Activator: bundle.test.b.internal.Activator
+Private-Package: bundle.test.b.internal

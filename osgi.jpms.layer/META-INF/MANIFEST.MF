@@ -4,8 +4,6 @@ Bundle-Name: Java Module Layer Support
 Bundle-SymbolicName: osgi.jpms.layer
 Bundle-Version: 1.0.0.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-9
-Import-Package: org.osgi.framework;version="[1.8.0,2.0.0)",
- org.osgi.framework.namespace;version="[1.1.0,2.0.0)",
- org.osgi.framework.wiring;version="[1.2.0,2.0.0)",
- org.osgi.resource;version="[1.0.0,2.0.0)"
-Bundle-Activator: osgi.jpms.layer.Activator
+Fragment-Host: system.bundle
+ExtensionBundle-Activator: osgi.jpms.internal.layer.Activator
+Export-Package: osgi.jpms.layer

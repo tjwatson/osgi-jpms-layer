@@ -1,5 +1,7 @@
 package bundle.test.b;
 
-public class B {
+import bundle.test.a.A;
+
+public class B extends A {
 
 }
