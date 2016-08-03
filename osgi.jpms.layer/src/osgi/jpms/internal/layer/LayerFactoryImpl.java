@@ -221,8 +221,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			// Ignore system bundle, we assume the launcher created a layer for the system.bundle module
 			if (wiring != null && wiring.isCurrent() && revision.getBundle().getBundleId() != 0) {
 				// assuming one bundle per bsn for now; first wins, it should have the highest version
-				// If multiple are allowed it is unclear which one would be used by JPMS when resolving child layers
-				// TODO JPMS-ISSUE-007 (Low Priority) can have multiple modules with the same name in the same layer but no way for modules to require a specific version
+				// When multiple versions are allowed into a Layer it is unclear which one would be used
+				// by JPMS when resolving child layers
+				// TODO JPMS-ISSUE-007 (Low Priority) Layers can have multiple modules with the same name in the same layer but no way for modules to require a specific version
 				if (!wirings.containsKey(revision.getSymbolicName())) {
 					wirings.put(revision.getSymbolicName(), wiring);
 				}

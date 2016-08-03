@@ -85,13 +85,19 @@ public class BundleLayerFinder implements ModuleFinder {
 		// to the JPMS otherwise the classes in them will be associated with the
 		// unknown module.  For now use the Private-Package header, should also do some
 		// scanning of the bundle when they don't have this header.
-		// TODO JPMS-ISSUE-002: (Low Priority) Can the Layer API be enhanced to map a classloader to a default module to use? 
+		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
+		// Can the Layer API be enhanced to map a classloader to a default module to use? 
 		String privatePackage = wiringEntry.getValue().getBundle().getHeaders("").get("Private-Package");
 		if (privatePackage != null) {
 			for (String pkg : privatePackage.split(",")) {
 				try {
-					// TODO JPMS-ISSUE-001: (High Priority) These must be exported according to JPMS.  Otherwise they cannot be reflected on.
-					// Either relax rules on reflecting in private types or enhance module declaration to say the package is only for reflection purposes
+					// TODO JPMS-ISSUE-001: (High Priority) Internals must be exported according to JPMS.  Otherwise they cannot be reflected on.
+					// Either relax rules on reflecting in private types or enhance module declaration 
+					// to say the package is only for reflection purposes.
+					// This would not be a big deal inside the OSGI Framework because bundles in the
+					// framework still must follow the delegation wires defined by OSGi for class loading.
+					// But declaring the internals as exported in bundle layer means the child JPMS layers will get access
+					// to our internals if they require a bundle module, which is horrible.
 					builder.exports(pkg.trim());
 				} catch (IllegalStateException e) {
 					// ignore duplicates
@@ -102,15 +108,21 @@ public class BundleLayerFinder implements ModuleFinder {
 		// TODO JPMS-ISSUE-003: (Medium Priority) Have to make JPMS aware of the OSGi delegation for class loading
 		// This is necessary so the OSGi bundle modules get read access granted for the bundle
 		// modules they depend on.  Otherwise errors occur when loading class from imported packages.
-		// Can the Layer API be enhanced so another module framework can addReads itself?
+		// If there are multiple bundles with the same symbolic name there is no way to require the specific version
+		// which is got selected during OSGi bundle resolution.
+		// Can the Layer API be enhanced so another module framework can addReads itself according to how it resolves
+		// its modules?
 		
 		// TODO JPMS-ISSUE-004: (High Priority) No bundle cycles allowed since we have to give a representation of the OSGi
 		// class loader delegation to JPMS this means the OSGi class loader graph cannot contain cycles.
-		// Can the Layer impl be enhanced to allow cycles.
+		// Can the Layer impl be enhanced to allow cycles? or
+		// Allow us to addReads ourselves (JPMS-ISSUE-003) would bypass this issue because then we would not have to
+		// have any requires on our ModuleDescritors for other bundles.
 
 		// TODO JPMS-ISSUE-005: (High Priority) the JPMS resolution graph is static once a layer is created
 		// This means dynamic imports in OSGi will not work unless the importing bundle module already has
 		// read access to the module providing the package being dynamically imported.
+		// Allowing us to addReads ourselves dynamically would help solve this issue also.
 		
 		// look for hosts that provide capabilities that effect class loading
 		Set<String> requires = new HashSet<>();
