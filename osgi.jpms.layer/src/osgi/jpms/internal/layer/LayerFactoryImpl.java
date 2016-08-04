@@ -70,7 +70,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	 * layers to be discarded and re-resolved in a later bundle layer.  The old (discarded) bundle
 	 * modules still exist, but will be overridden by later bundle layers
 	 */
-	// TODO JPMS-ISSUE-006 (Medium Priority) static set of resolved modules causes class loader pinning if a module is discarded
+	// TODO JPMS-ISSUE-007 (Medium Priority) static set of resolved modules causes class loader pinning if a module is discarded
 	// Can JPMS be enhanced to discard sub graphs of modules in a Layer?
 	class BundleLayer {
 		final Layer layer;
@@ -223,7 +223,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				// assuming one bundle per bsn for now; first wins, it should have the highest version
 				// When multiple versions are allowed into a Layer it is unclear which one would be used
 				// by JPMS when resolving child layers
-				// TODO JPMS-ISSUE-007 (Low Priority) Layers can have multiple modules with the same name in the same layer but no way for modules to require a specific version
+				// TODO JPMS-ISSUE-006 (Low Priority) Layers can have multiple modules with the same name in the same layer but no way for modules to require a specific version
 				if (!wirings.containsKey(revision.getSymbolicName())) {
 					wirings.put(revision.getSymbolicName(), wiring);
 				}
