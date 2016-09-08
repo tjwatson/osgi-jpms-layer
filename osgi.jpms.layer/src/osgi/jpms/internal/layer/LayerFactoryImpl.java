@@ -203,13 +203,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final ReadLock layersRead;
 	private final AtomicLong nextLayerId = new AtomicLong(0);
 	private BundleLayer current = null;
+	private Throwable previousLayerFailure = null;
 
 	public LayerFactoryImpl(BundleContext context) {
 		fwkWiring = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).adapt(FrameworkWiring.class);
 		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 		layersWrite = lock.writeLock();
 		layersRead = lock.readLock();
-		//createNewBundleLayer();
 	}
 
 	private void createNewBundleLayer() {
@@ -242,7 +242,12 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				}
 			}
 			if (current == null || !wirings.isEmpty()) {
-				current = new BundleLayer(current, wirings);
+				try {
+					current = new BundleLayer(current, wirings);
+				} catch (Exception e) {
+					e.printStackTrace();
+					previousLayerFailure = e;
+				}
 			}
 		} finally {
 			layersWrite.unlock();
@@ -300,6 +305,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			// need to make sure the class loader is associated with a layer before allowing a class define
 			layersRead.lock();
 			try {
+				if (previousLayerFailure != null) {
+					return;
+				}
 				createNewLayer = current == null || current.findWiring(wovenClass.getBundleWiring()) == null;
 			} finally {
 				layersRead.unlock();
@@ -320,8 +328,20 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			// bundle to become invalidated.
 			invalidateLayer(event.getBundle());
 			break;
+		case BundleEvent.RESOLVED:
+			// clear fail flag to try again
+			clearFailedFlag();
 		default:
 			break;
+		}
+	}
+
+	private void clearFailedFlag() {
+		layersWrite.lock();
+		try {
+			previousLayerFailure = null;
+		} finally {
+			layersWrite.unlock();
 		}
 	}
 

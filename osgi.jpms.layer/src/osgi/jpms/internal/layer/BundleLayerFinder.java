@@ -36,7 +36,9 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 
+import org.eclipse.osgi.util.ManifestElement;
 import org.osgi.framework.Bundle;
+import org.osgi.framework.BundleException;
 import org.osgi.framework.Constants;
 import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
@@ -78,6 +80,8 @@ public class BundleLayerFinder implements ModuleFinder {
 					builder.exports(packageName);
 				} catch (IllegalStateException e) {
 					// ignore duplicates
+				} catch (IllegalArgumentException e) {
+					System.err.println("XXX bad package name: " + packageName);
 				}
 			}
 		}
@@ -88,22 +92,32 @@ public class BundleLayerFinder implements ModuleFinder {
 		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
 		// Can the Layer API be enhanced to map a classloader to a default module to use? 
 		String privatePackage = wiringEntry.getValue().getBundle().getHeaders("").get("Private-Package");
-		if (privatePackage != null) {
-			for (String pkg : privatePackage.split(",")) {
-				try {
-					// TODO JPMS-ISSUE-001: (High Priority) Internals must be exported according to JPMS.  Otherwise they cannot be reflected on.
-					// Either relax rules on reflecting in private types or enhance module declaration 
-					// to say the package is only for reflection purposes.
-					// This would not be a big deal inside the OSGI Framework because bundles in the
-					// framework still must follow the delegation wires defined by OSGi for class loading.
-					// But declaring the internals as exported in bundle layer means the child JPMS layers will get access
-					// to our internals if they require a bundle module, which is horrible.
-					builder.exports(pkg.trim());
-				} catch (IllegalStateException e) {
-					// ignore duplicates
+		try {
+			ManifestElement[] packageElements = ManifestElement.parseHeader("Private-Package", privatePackage);
+			if (packageElements != null) {
+				for (ManifestElement packageElement : packageElements) {
+					for (String packageName : packageElement.getValueComponents()) {
+						try {
+							// TODO JPMS-ISSUE-001: (High Priority) Internals must be exported according to JPMS.  Otherwise they cannot be reflected on.
+							// Either relax rules on reflecting in private types or enhance module declaration 
+							// to say the package is only for reflection purposes.
+							// This would not be a big deal inside the OSGI Framework because bundles in the
+							// framework still must follow the delegation wires defined by OSGi for class loading.
+							// But declaring the internals as exported in bundle layer means the child JPMS layers will get access
+							// to our internals if they require a bundle module, which is horrible.
+							builder.exports(packageName);
+						} catch (IllegalStateException e) {
+							// ignore duplicates
+						} catch (IllegalArgumentException e) {
+							System.err.println("XXX bad package name: " + packageName);
+						}
+					}
 				}
 			}
+		} catch (BundleException e1) {
+			// ignore and move on
 		}
+
 
 		// TODO JPMS-ISSUE-003: (Medium Priority) Have to make JPMS aware of the OSGi delegation for class loading
 		// This is necessary so the OSGi bundle modules get read access granted for the bundle
@@ -123,6 +137,11 @@ public class BundleLayerFinder implements ModuleFinder {
 		// This means dynamic imports in OSGi will not work unless the importing bundle module already has
 		// read access to the module providing the package being dynamically imported.
 		// Allowing us to addReads ourselves dynamically would help solve this issue also.
+
+		// TODO JPMS-ISSUE-008: (Medium Priority) Split packages are not allowed in JPMS
+		// OSGi Require-Bundle allows for split packages to be aggregated.  This is not a best practice
+		// use of OSGi, but it is allowed.  If bundles in the wirings show a split package JPMS will
+		// not allow the layer to be created.
 		
 		// look for hosts that provide capabilities that effect class loading
 		Set<String> requires = new HashSet<>();
