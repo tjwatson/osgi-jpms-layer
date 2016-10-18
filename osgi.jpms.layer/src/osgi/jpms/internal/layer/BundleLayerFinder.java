@@ -21,6 +21,7 @@ package osgi.jpms.internal.layer;
 import java.io.IOException;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleDescriptor.Builder;
+import java.lang.module.ModuleDescriptor.Exports.Modifier;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
@@ -28,6 +29,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -35,6 +37,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.eclipse.osgi.util.ManifestElement;
 import org.osgi.framework.Bundle;
@@ -70,14 +73,14 @@ public class BundleLayerFinder implements ModuleFinder {
 		// name -> bundle bsn
 		// version -> bundle version
 		// exports -> wirings package capabilities
-		Builder builder = new ModuleDescriptor.Builder(wiringEntry.getKey());
+		Builder builder = ModuleDescriptor.module(wiringEntry.getKey());
 		builder.version(wiringEntry.getValue().getBundle().getVersion().toString());
 		for (BundleCapability packageCap : wiringEntry.getValue().getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
 			// we only care about non-internal and non-friends-only packages
 			if (packageCap.getDirectives().get("x-internal") == null && packageCap.getDirectives().get("x-friends") == null) {
 				String packageName = (String) packageCap.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE);
 				try {
-					builder.exports(packageName);
+					builder.exports(Collections.singleton(Modifier.PRIVATE), packageName);
 				} catch (IllegalStateException e) {
 					// ignore duplicates
 				} catch (IllegalArgumentException e) {
@@ -105,7 +108,7 @@ public class BundleLayerFinder implements ModuleFinder {
 							// framework still must follow the delegation wires defined by OSGi for class loading.
 							// But declaring the internals as exported in bundle layer means the child JPMS layers will get access
 							// to our internals if they require a bundle module, which is horrible.
-							builder.exports(packageName);
+							builder.exports(Collections.singleton(Modifier.PRIVATE), packageName);
 						} catch (IllegalStateException e) {
 							// ignore duplicates
 						} catch (IllegalArgumentException e) {
@@ -191,6 +194,11 @@ public class BundleLayerFinder implements ModuleFinder {
 			
 			@Override
 			public void close() throws IOException {
+			}
+
+			@Override
+			public Stream<String> list() throws IOException {
+				return Stream.empty();
 			}
 		};
 	}
