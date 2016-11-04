@@ -36,6 +36,7 @@ public class Activator implements BundleActivator {
 		if (!Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(getClass().getModule().getName())) {
 			throw new IllegalStateException("The framework launcher has not setup the system.bundle module for the framework implementation: " + getClass().getModule());
 		}
+		AddReadsUtil.checkForError();
 		// Create the LayerFactory implementation and register it
 		factory = new LayerFactoryImpl(context);
 		// The factory is a bundle listener to keep track of resolved bundles

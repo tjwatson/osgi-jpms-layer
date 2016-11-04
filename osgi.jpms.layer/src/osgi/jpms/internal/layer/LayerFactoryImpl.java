@@ -48,8 +48,10 @@ import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
 import org.osgi.framework.namespace.BundleNamespace;
+import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.resource.Requirement;
@@ -91,9 +93,12 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			// resolve all names in the wiring map
 			Configuration config = parentLayer.configuration().resolveRequires(finder, ModuleFinder.of(), wiringMap.keySet());
 			// Map the module names to the wiring class loaders
-			layer = parentLayer.defineModules(config, (name) -> {
+			Layer bundleLayer = parentLayer.defineModules(config, (name) -> {
 				return Optional.ofNullable(wiringMap.get(name)).map((wiring) -> {return wiring.getClassLoader();}).get();
 			});
+			AddReadsUtil.defineAddReadsConsumer(bundleLayer);
+			layer = bundleLayer;
+			addReadsNest(this);
 		}
 
 		NamedLayer addChild(String name, Layer layer) {
@@ -134,6 +139,84 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				currentLayer = currentLayer.parent;
 			}
 			return null;
+		}
+	}
+
+	static void addReadsNest(BundleLayer bundleLayer) {
+		Set<Module> bootModules = Layer.boot().modules();
+
+		// first add reads to all boot modules
+		for (Module module : bundleLayer.layer.modules()) {
+			AddReadsUtil.addReads(module, bootModules);
+		}
+
+		// Now ensure bidirectional read of all bundle modules.
+		// Not checking for existing edges for simplicity.
+		Set<Module> allBundleModules = getAllBundleModules(bundleLayer);
+		for (Module bundleModule : allBundleModules) {
+			AddReadsUtil.addReads(bundleModule, allBundleModules);
+			// add reads to the system.bundle
+			AddReadsUtil.addReads(bundleModule, 
+					Collections.singleton(
+							bundleLayer.layer.findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get()));
+		}
+
+
+	}
+
+	private static Set<Module> getAllBundleModules(BundleLayer bundleLayer) {
+		Set<Module> bundleModules = new HashSet<>();
+		while(bundleLayer != null) {
+			bundleModules.addAll(bundleLayer.layer.modules());
+			bundleLayer = bundleLayer.parent;
+		}
+		return bundleModules;
+	}
+
+	static void addReadsWires(Layer layer, Map<String, BundleWiring> wiringMap) {
+		// TODO adding read for all boot modules that hava java.* packages
+		// could be smarter about this according to required osgi.ee capability
+		Set<Module> autoReadsBootModules = new HashSet<>(Layer.boot().modules());
+		Map<String, Module> bootPackages = new HashMap<>();
+		for (Iterator<Module> bootModules = autoReadsBootModules.iterator(); bootModules.hasNext();) {
+			Module module = bootModules.next();
+			boolean hasJavaPkg = false;
+			for (String pkgName : module.getPackages()) {
+				hasJavaPkg |= pkgName.startsWith("java.");
+				bootPackages.put(pkgName, module);
+			}
+			if (!hasJavaPkg) {
+				// no java.* package remove from autoReadsBootModules
+				bootModules.remove();
+			}
+		}
+
+		for (Entry<String, BundleWiring> wiringEntry : wiringMap.entrySet()) {
+			Module wantsRead = layer.findModule(wiringEntry.getKey()).get();
+			// addReads for all boot modules with java.* packages
+			for (Module bootModule : autoReadsBootModules) {
+				AddReadsUtil.addReads(wantsRead, Collections.singleton(bootModule));
+			}
+			// addReads for all modules that export a package we are wired to
+			for (BundleWire pkgWire : wiringEntry.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE)) {
+				String targetName;
+				if (pkgWire.getProviderWiring().getBundle().getBundleId() == 0) {
+					Module bootModule = bootPackages.get(pkgWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
+					if (bootModule != null) {
+						targetName = bootModule.getName();
+					} else {
+						targetName = Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
+					}
+				} else {
+					targetName = pkgWire.getProviderWiring().getBundle().getSymbolicName();
+				}
+				Optional<Module> foundTarget = layer.findModule(targetName);
+				if (foundTarget.isPresent()) {
+					AddReadsUtil.addReads(wantsRead, Collections.singleton(foundTarget.get()));
+				} else {
+					throw new RuntimeException("No target module found: " + targetName);
+				}
+			}
 		}
 	}
 

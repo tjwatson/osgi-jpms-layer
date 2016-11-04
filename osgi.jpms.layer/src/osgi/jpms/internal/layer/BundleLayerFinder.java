@@ -21,18 +21,14 @@ package osgi.jpms.internal.layer;
 import java.io.IOException;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleDescriptor.Builder;
-import java.lang.module.ModuleDescriptor.Exports.Modifier;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
@@ -40,13 +36,9 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import org.eclipse.osgi.util.ManifestElement;
-import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleException;
-import org.osgi.framework.Constants;
-import org.osgi.framework.namespace.BundleNamespace;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
-import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 
 /**
@@ -80,7 +72,8 @@ public class BundleLayerFinder implements ModuleFinder {
 			if (packageCap.getDirectives().get("x-internal") == null && packageCap.getDirectives().get("x-friends") == null) {
 				String packageName = (String) packageCap.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE);
 				try {
-					builder.exports(Collections.singleton(Modifier.PRIVATE), packageName);
+					builder.exports(packageName);
+					builder.opens(packageName);
 				} catch (IllegalStateException e) {
 					// ignore duplicates
 				} catch (IllegalArgumentException e) {
@@ -101,14 +94,7 @@ public class BundleLayerFinder implements ModuleFinder {
 				for (ManifestElement packageElement : packageElements) {
 					for (String packageName : packageElement.getValueComponents()) {
 						try {
-							// TODO JPMS-ISSUE-001: (High Priority) Internals must be exported according to JPMS.  Otherwise they cannot be reflected on.
-							// Either relax rules on reflecting in private types or enhance module declaration 
-							// to say the package is only for reflection purposes.
-							// This would not be a big deal inside the OSGI Framework because bundles in the
-							// framework still must follow the delegation wires defined by OSGi for class loading.
-							// But declaring the internals as exported in bundle layer means the child JPMS layers will get access
-							// to our internals if they require a bundle module, which is horrible.
-							builder.exports(Collections.singleton(Modifier.PRIVATE), packageName);
+							builder.opens(packageName);
 						} catch (IllegalStateException e) {
 							// ignore duplicates
 						} catch (IllegalArgumentException e) {
@@ -116,51 +102,34 @@ public class BundleLayerFinder implements ModuleFinder {
 						}
 					}
 				}
+			} else {
+				// need to discover packages
+				Collection<String> classes = wiringEntry.getValue().listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
+				Set<String> packages = new HashSet<>();
+				for (String path : classes) {
+					int beginIndex = 0;
+					if (path.startsWith("/")) {
+						beginIndex = 1;
+					}
+					int endIndex = path.lastIndexOf('/');
+					path = path.substring(beginIndex, endIndex);
+					packages.add(path.replace('/', '.'));
+				}
+				for (String pkg : packages) {
+					try {
+						builder.exports(pkg);
+						builder.opens(pkg);
+					} catch (IllegalStateException e) {
+						// ignore duplicates
+					} catch (IllegalArgumentException e) {
+						System.err.println("XXX bad package name: " + pkg);
+					}
+				}
 			}
+			// TODO hack to enable addReads
+			builder.opens("osgi.jpms.internal.layer.addreads");
 		} catch (BundleException e1) {
 			// ignore and move on
-		}
-
-
-		// TODO JPMS-ISSUE-003: (Medium Priority) Have to make JPMS aware of the OSGi delegation for class loading
-		// This is necessary so the OSGi bundle modules get read access granted for the bundle
-		// modules they depend on.  Otherwise errors occur when loading class from imported packages.
-		// If there are multiple bundles with the same symbolic name there is no way to require the specific version
-		// which is got selected during OSGi bundle resolution.
-		// Can the Layer API be enhanced so another module framework can addReads itself according to how it resolves
-		// its modules?
-		
-		// TODO JPMS-ISSUE-004: (High Priority) No bundle cycles allowed since we have to give a representation of the OSGi
-		// class loader delegation to JPMS this means the OSGi class loader graph cannot contain cycles.
-		// Can the Layer impl be enhanced to allow cycles? or
-		// Allow us to addReads ourselves (JPMS-ISSUE-003) would bypass this issue because then we would not have to
-		// have any requires on our ModuleDescritors for other bundles.
-
-		// TODO JPMS-ISSUE-005: (High Priority) the JPMS resolution graph is static once a layer is created
-		// This means dynamic imports in OSGi will not work unless the importing bundle module already has
-		// read access to the module providing the package being dynamically imported.
-		// Allowing us to addReads ourselves dynamically would help solve this issue also.
-
-		// TODO JPMS-ISSUE-008: (Medium Priority) Split packages are not allowed in JPMS
-		// OSGi Require-Bundle allows for split packages to be aggregated.  This is not a best practice
-		// use of OSGi, but it is allowed.  If bundles in the wirings show a split package JPMS will
-		// not allow the layer to be created.
-		
-		// look for hosts that provide capabilities that effect class loading
-		Set<String> requires = new HashSet<>();
-		List<BundleWire> classLoadingWires = new ArrayList<>();
-		classLoadingWires.addAll(wiringEntry.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE));
-		classLoadingWires.addAll(wiringEntry.getValue().getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE));
-		for (BundleWire bundleWire : classLoadingWires) {
-			Bundle b = bundleWire.getProviderWiring().getBundle();
-			if (b.getBundleId() != 0) {
-				requires.add(b.getSymbolicName());
-			}
-		}
-		// always add the system.bundle module
-		requires.add(Constants.SYSTEM_BUNDLE_SYMBOLICNAME);
-		for (String required : requires) {
-			builder.requires(required);
 		}
 		return new ModuleReference(builder.build(), null, () -> {return getReader(wiringEntry.getValue());});
 	}
