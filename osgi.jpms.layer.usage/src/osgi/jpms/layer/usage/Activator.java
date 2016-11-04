@@ -32,6 +32,7 @@ public class Activator implements BundleActivator {
 					toRefresh.add(b);
 				}
 			}
+
 			// refresh the test bundles and test another layer
 			CountDownLatch refreshed = new CountDownLatch(1);
 			context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).adapt(FrameworkWiring.class).refreshBundles(toRefresh, (event) ->{
@@ -59,16 +60,21 @@ public class Activator implements BundleActivator {
 		Set<Path> modPaths = Set.of(new File(context.getProperty("jpms.mods.path")).toPath());
 		System.out.println("Using modules at: " + modPaths);
 
-		NamedLayer jpmsLayer = layerFactory.createLayerWithManyLoaders("JPMS Test Layer Many ClassLoaders", modPaths , jpmsNames, null);
-		tryLoadClasses(jpmsLayer);
+		NamedLayer layer1 = layerFactory.createLayerWithManyLoaders("JPMS Test Layer MANY loaders", modPaths , jpmsNames, null);
+		tryLoadClasses(layer1);
+		layer1.consumeEvents((e) -> System.out.println(e + ": " + layer1.getName() + ": " + layer1.getId()));
+		layer1.consumeEvents((e) -> System.out.println(e + ": second consumer"));
 
-		jpmsLayer = layerFactory.createLayerWithOneLoader("JPMS Test Layer Many ClassLoaders", modPaths , jpmsNames, null);
-		tryLoadClasses(jpmsLayer);
+		NamedLayer layer2 = layerFactory.createLayerWithOneLoader("JPMS Test Layer ONE loader", modPaths , jpmsNames, null);
+		tryLoadClasses(layer2);
+		layer2.consumeEvents((e) -> System.out.println(e + ": " + layer2.getName() + ": " + layer2.getId()));
+		layer2.consumeEvents((e) -> System.out.println(e + ": second consumer"));
 	}
 
 	private void tryLoadClasses(NamedLayer jpmsLayer) {
+		System.out.println(jpmsLayer.getName());
 		for (Module jpmsModule : jpmsLayer.getLayer().modules()) {
-			System.out.println(jpmsModule.getDescriptor());
+			System.out.println("  " + jpmsModule.getDescriptor());
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".C");
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".A");
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".B");
@@ -78,9 +84,9 @@ public class Activator implements BundleActivator {
 	private void tryLoadClass(Layer layer, String moduleName, String className) {
 		try {
 			Class<?> c = layer.findLoader(moduleName).loadClass(className);
-			System.out.println("SUCCESS: " + c + " from->" + c.getModule() + " SUPER: " + c.getSuperclass() + " from->" + c.getSuperclass().getModule());
+			System.out.println("    SUCCESS: " + c + " from->" + c.getModule() + " SUPER: " + c.getSuperclass() + " from->" + c.getSuperclass().getModule());
 		} catch (Throwable t) {
-			System.err.println("FAILED: " + t.getMessage());
+			System.err.println("    FAILED: " + t.getMessage());
 		}
 	}
 

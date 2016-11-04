@@ -23,35 +23,38 @@ import java.lang.module.ModuleFinder;
 import java.lang.reflect.Layer;
 import java.lang.reflect.Module;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
-import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleEvent;
 import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkEvent;
+import org.osgi.framework.FrameworkListener;
 import org.osgi.framework.SynchronousBundleListener;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
 import org.osgi.framework.namespace.BundleNamespace;
-import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
-import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.resource.Requirement;
@@ -59,174 +62,29 @@ import org.osgi.resource.Resource;
 
 import osgi.jpms.layer.LayerFactory;
 
-public class LayerFactoryImpl implements LayerFactory, WovenClassListener, WeavingHook, SynchronousBundleListener {
+public class LayerFactoryImpl implements LayerFactory, WovenClassListener, WeavingHook, SynchronousBundleListener, FrameworkListener {
 
-	/**
-	 * A bundle layer creates a JPMS layer which is used to represent resolve OSGi bundles as modules.
-	 * As bundles are resolved a new bundle layer is created which uses the previous bundle layer as
-	 * its parent.  Bundle layers provide a single linear parent hierarchy.  A bundle layer can only
-	 * have one parent and will only be a parent to a single bundle layer, although it can be a parent
-	 * to multiple named layers 
-	 * <p>
-	 * This single linear parent hierarchy is necessary to allow bundle modules contained in parent
-	 * layers to be discarded and re-resolved in a later bundle layer.  The old (discarded) bundle
-	 * modules still exist, but will be overridden by later bundle layers
-	 */
-	// TODO JPMS-ISSUE-007 (Medium Priority) static set of resolved modules causes class loader pinning if a module is discarded
-	// Can JPMS be enhanced to discard sub graphs of modules in a Layer?
-	class BundleLayer {
-		final Layer layer;
-		final AtomicBoolean isValid = new AtomicBoolean(true);
-		final BundleLayer parent;
-		final Collection<NamedLayer> children = new HashSet<>();
-		final Map<Bundle, BundleWiring> wirings = new HashMap<>();
-
-		BundleLayer(BundleLayer parent, Map<String, BundleWiring> wiringMap) {
-			this.parent = parent;
-			for (BundleWiring wiring : wiringMap.values()) {
-				wirings.put(wiring.getBundle(), wiring);
-			}
-			// Create a finder based of the wiring map
-			BundleLayerFinder finder = new BundleLayerFinder(wiringMap);
-			// If the parent is null then use the layer the framework is in as the parent
-			Layer parentLayer = parent == null ? Bundle.class.getModule().getLayer() : parent.layer;
-			// resolve all names in the wiring map
-			Configuration config = parentLayer.configuration().resolveRequires(finder, ModuleFinder.of(), wiringMap.keySet());
-			// Map the module names to the wiring class loaders
-			Layer bundleLayer = parentLayer.defineModules(config, (name) -> {
-				return Optional.ofNullable(wiringMap.get(name)).map((wiring) -> {return wiring.getClassLoader();}).get();
-			});
-			AddReadsUtil.defineAddReadsConsumer(bundleLayer);
-			layer = bundleLayer;
-			addReadsNest(this);
-		}
-
-		NamedLayer addChild(String name, Layer layer) {
-			NamedLayer namedLayer = new NamedLayerImpl(this, layer, name);
-			children.add(namedLayer);
-			return namedLayer;
-		}
-
-		/**
-		 * Finds a bundle layer the wiring is contained in
-		 * @param wiring the wiring to find a bundle layer for
-		 * @return the bundle layer for the wiring or {@code null} if
-		 * there is no bundle layer found.
-		 */
-		BundleLayer findWiring(BundleWiring wiring) {
-			BundleLayer currentLayer = this;
-			while (currentLayer != null) {
-				if (wiring.equals(currentLayer.wirings.get(wiring.getBundle()))) {
-					return currentLayer;
-				}
-				currentLayer = currentLayer.parent;
-			}
-			return null;
-		}
-
-		/**
-		 * Finds the bundle layer a bundle is contained in
-		 * @param b the bundle to find a bundle layer for
-		 * @return the bundle layer for the bundle or {@code null} if
-		 * there is no bundle layer found.
-		 */
-		BundleLayer findBundle(Bundle b) {
-			BundleLayer currentLayer = this;
-			while (currentLayer != null) {
-				if (wirings.containsKey(b)) {
-					return currentLayer;
-				}
-				currentLayer = currentLayer.parent;
-			}
-			return null;
-		}
-	}
-
-	static void addReadsNest(BundleLayer bundleLayer) {
+	static void addReadsNest(Map<BundleWiring, Module> wiringToModule) {
 		Set<Module> bootModules = Layer.boot().modules();
-
-		// first add reads to all boot modules
-		for (Module module : bundleLayer.layer.modules()) {
-			AddReadsUtil.addReads(module, bootModules);
-		}
-
-		// Now ensure bidirectional read of all bundle modules.
+		Collection<Module> allBundleModules = wiringToModule.values();
 		// Not checking for existing edges for simplicity.
-		Set<Module> allBundleModules = getAllBundleModules(bundleLayer);
-		for (Module bundleModule : allBundleModules) {
-			AddReadsUtil.addReads(bundleModule, allBundleModules);
-			// add reads to the system.bundle
-			AddReadsUtil.addReads(bundleModule, 
-					Collections.singleton(
-							bundleLayer.layer.findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get()));
-		}
-
-
-	}
-
-	private static Set<Module> getAllBundleModules(BundleLayer bundleLayer) {
-		Set<Module> bundleModules = new HashSet<>();
-		while(bundleLayer != null) {
-			bundleModules.addAll(bundleLayer.layer.modules());
-			bundleLayer = bundleLayer.parent;
-		}
-		return bundleModules;
-	}
-
-	static void addReadsWires(Layer layer, Map<String, BundleWiring> wiringMap) {
-		// TODO adding read for all boot modules that hava java.* packages
-		// could be smarter about this according to required osgi.ee capability
-		Set<Module> autoReadsBootModules = new HashSet<>(Layer.boot().modules());
-		Map<String, Module> bootPackages = new HashMap<>();
-		for (Iterator<Module> bootModules = autoReadsBootModules.iterator(); bootModules.hasNext();) {
-			Module module = bootModules.next();
-			boolean hasJavaPkg = false;
-			for (String pkgName : module.getPackages()) {
-				hasJavaPkg |= pkgName.startsWith("java.");
-				bootPackages.put(pkgName, module);
-			}
-			if (!hasJavaPkg) {
-				// no java.* package remove from autoReadsBootModules
-				bootModules.remove();
-			}
-		}
-
-		for (Entry<String, BundleWiring> wiringEntry : wiringMap.entrySet()) {
-			Module wantsRead = layer.findModule(wiringEntry.getKey()).get();
-			// addReads for all boot modules with java.* packages
-			for (Module bootModule : autoReadsBootModules) {
-				AddReadsUtil.addReads(wantsRead, Collections.singleton(bootModule));
-			}
-			// addReads for all modules that export a package we are wired to
-			for (BundleWire pkgWire : wiringEntry.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE)) {
-				String targetName;
-				if (pkgWire.getProviderWiring().getBundle().getBundleId() == 0) {
-					Module bootModule = bootPackages.get(pkgWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE));
-					if (bootModule != null) {
-						targetName = bootModule.getName();
-					} else {
-						targetName = Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
-					}
-				} else {
-					targetName = pkgWire.getProviderWiring().getBundle().getSymbolicName();
-				}
-				Optional<Module> foundTarget = layer.findModule(targetName);
-				if (foundTarget.isPresent()) {
-					AddReadsUtil.addReads(wantsRead, Collections.singleton(foundTarget.get()));
-				} else {
-					throw new RuntimeException("No target module found: " + targetName);
-				}
-			}
+		for (Module module : allBundleModules) {
+			// First add reads to all boot modules.
+			AddReadsUtil.addReads(module, bootModules);
+			// Now ensure bidirectional read of all bundle modules.
+			AddReadsUtil.addReads(module, allBundleModules);
+			// Add read to the system.bundle module.
+			AddReadsUtil.addReads(module, Collections.singleton(systemModule));
 		}
 	}
 
 	class NamedLayerImpl implements NamedLayer {
-		final BundleLayer parentbundleLayer;
 		final Layer layer;
 		final String name;
 		final long id = nextLayerId.getAndIncrement();
-		NamedLayerImpl(BundleLayer parentBundleLayer, Layer layer, String name) {
-			this.parentbundleLayer = parentBundleLayer;
+		final AtomicReference<Consumer<Event>> consumers = new AtomicReference<>((e) -> {});
+		final AtomicReference<Boolean> isValid = new AtomicReference<>(true);
+		NamedLayerImpl(Layer layer, String name) {
 			this.layer = layer;
 			this.name = name;
 		}
@@ -247,7 +105,19 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 
 		@Override
 		public boolean isValid() {
-			return parentbundleLayer.isValid.get();
+			return isValid.get();
+		}
+		public void invalidate() {
+			isValid.updateAndGet((previous) -> {
+				if (previous) {
+					consumers.get().accept(Event.INVALID);
+				}
+				return false;
+			});
+		}
+		@Override
+		public void consumeEvents(Consumer<Event> consumer) {
+			consumers.updateAndGet((previous) -> previous.andThen(consumer));
 		}
 		
 	}
@@ -263,7 +133,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		@Override
 		public String getNamespace() {
 			return BundleNamespace.BUNDLE_NAMESPACE;
-					}
+		}
 
 		@Override
 		public Map<String, String> getDirectives() {
@@ -281,12 +151,29 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}	
 	};
 
+	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
 	private final FrameworkWiring fwkWiring;
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
 	private final AtomicLong nextLayerId = new AtomicLong(0);
-	private BundleLayer current = null;
-	private Throwable previousLayerFailure = null;
+
+	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
+	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
+		String n1 = w1.getRevision().getSymbolicName();
+		String n2 = w2.getRevision().getSymbolicName();
+		n1 = n1 == null ? "" : n1;
+		n2 = n2 == null ? "" : n2;
+		int nameCompare = n1.compareTo(n2);
+		if (nameCompare != 0) {
+			return nameCompare;
+		}
+		int versionCompare = -(w1.getRevision().getVersion().compareTo(w1.getRevision().getVersion()));
+		if (versionCompare != 0) {
+			return versionCompare;
+		}
+		return w1.getBundle().compareTo(w2.getBundle());
+	});
+
 
 	public LayerFactoryImpl(BundleContext context) {
 		fwkWiring = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).adapt(FrameworkWiring.class);
@@ -295,43 +182,59 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		layersRead = lock.readLock();
 	}
 
-	private void createNewBundleLayer() {
-		Map<String, BundleWiring> wirings = new HashMap<>();
+	private Set<BundleWiring> getInUseBundleWirings() {
+		Set<BundleWiring> wirings = new HashSet<>();
 		Collection<BundleCapability> bundles = fwkWiring.findProviders(ALL_BUNDLES_REQUIREMENT);
 		for (BundleCapability bundleCap : bundles) {
 			BundleRevision revision = bundleCap.getRevision();
 			BundleWiring wiring = revision.getWiring();
 			// Ignore system bundle, we assume the launcher created a layer for the system.bundle module
-			if (wiring != null && wiring.isCurrent() && revision.getBundle().getBundleId() != 0) {
-				// assuming one bundle per bsn for now; first wins, it should have the highest version
-				// When multiple versions are allowed into a Layer it is unclear which one would be used
-				// by JPMS when resolving child layers
-				// TODO JPMS-ISSUE-006 (Low Priority) Layers can have multiple modules with the same name in the same layer but no way for modules to require a specific version
-				if (!wirings.containsKey(revision.getSymbolicName())) {
-					wirings.put(revision.getSymbolicName(), wiring);
-				}
+			if (wiring != null && wiring.isInUse() && revision.getBundle().getBundleId() != 0) {
+				wirings.add(wiring);
 			}
 		}
+		return wirings;
+	}
+
+	private void createNewWiringLayers() {
 		layersWrite.lock();
 		try {
-			if (current != null) {
-				Iterator<Entry<String, BundleWiring>> iWirings = wirings.entrySet().iterator();
-				while (iWirings.hasNext()) {
-					BundleWiring wiring = iWirings.next().getValue();
-					// Check if parent already has this wiring
-					if (current.findWiring(wiring) != null) {
-						iWirings.remove();
+			// first clean up layers that are not in use anymore
+			for (Iterator<Entry<BundleWiring, Module>> wirings = wiringToModule.entrySet().iterator(); wirings.hasNext();) {
+				Entry<BundleWiring, Module> wiringModule = wirings.next();
+				if (!wiringModule.getKey().isInUse()) {
+					// remove the wiring no long in use
+					wirings.remove();
+					// invalidate any named layers that used it
+					Collection<NamedLayerImpl> namedLayers = moduleToNamedLayers.remove(wiringModule.getValue());
+					if (namedLayers != null) {
+						for (NamedLayerImpl namedLayer : namedLayers) {
+							namedLayer.invalidate();
+						}
 					}
+					AddReadsUtil.clearAddReadsCunsumer(wiringModule.getValue());
 				}
 			}
-			if (current == null || !wirings.isEmpty()) {
-				try {
-					current = new BundleLayer(current, wirings);
-				} catch (Exception e) {
-					e.printStackTrace();
-					previousLayerFailure = e;
+			Set<BundleWiring> currentWirings = getInUseBundleWirings();
+
+			// create modules for current wirings that don't have layers yet
+			for (BundleWiring wiring : currentWirings) {
+				if (!wiringToModule.containsKey(wiring)) {
+					BundleLayerFinder finder = new BundleLayerFinder(wiring);
+					Configuration config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+					// Map the module names to the wiring class loaders
+					Layer layer = Layer.empty().defineModules(
+							config, 
+							(name) -> {
+								return Optional.ofNullable(
+										finder.name.equals(name) ? wiring : null).map(
+												(w) -> {return w.getClassLoader();}).get();
+							});
+					AddReadsUtil.defineAddReadsConsumer(layer);
+					wiringToModule.put(wiring, layer.modules().iterator().next());
 				}
 			}
+			addReadsNest(wiringToModule);
 		} finally {
 			layersWrite.unlock();
 		}
@@ -341,29 +244,58 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		ModuleFinder finder = ModuleFinder.of(paths.toArray(new Path[0]));
 		layersWrite.lock();
 		try {
-			if (current == null) {
-				createNewBundleLayer();
-			}
-			Configuration config = current.layer.configuration().resolveRequires(finder, ModuleFinder.of(), roots);
-			Layer jpmsLayer;
+			createNewWiringLayers();
+			Collection<Module> modules = wiringToModule.values();
+			List<Configuration> configurations = getConfigurations(modules);
+			List<Layer> layers = getLayers(modules);
+			Configuration config = Configuration.resolveRequires(finder, configurations, ModuleFinder.of(), roots);
+			Layer layer;
 			switch (type) {
 				case OneLoader:
-					jpmsLayer = current.layer.defineModulesWithOneLoader(config, parent);
+					layer = Layer.defineModulesWithOneLoader(config, layers, parent);
 					break;
 				case ManyLoaders :
-					jpmsLayer = current.layer.defineModulesWithManyLoaders(config, parent);
+					layer = Layer.defineModulesWithManyLoaders(config, layers, parent);
 					break;
 				case MappedLoaders :
-					jpmsLayer = current.layer.defineModules(config, mappedLoaders);
+					layer = Layer.defineModules(config, layers, mappedLoaders);
 					break;
 				default:
 					throw new IllegalArgumentException(type.toString());
 			}
-			return current.addChild(name, jpmsLayer);
-
+			NamedLayerImpl result = new NamedLayerImpl(layer, name);
+			for (Module m : modules) {
+				Collection<NamedLayerImpl> children = moduleToNamedLayers.get(m);
+				if (children == null) {
+					children = new ArrayList<>();
+					moduleToNamedLayers.put(m, children);
+				}
+				children.add(result);
+			}
+			return result;
 		} finally {
 			layersWrite.unlock();
 		}
+	}
+
+	private static List<Configuration> getConfigurations(Collection<Module> modules) {
+		List<Configuration> result = new ArrayList<>(modules.size());
+		for (Module m : modules) {
+			result.add(m.getLayer().configuration());
+		}
+		// always add the system.bundle configuration (which has boot as parent)
+		result.add(systemModule.getLayer().configuration());
+		return result;
+	}
+
+	private List<Layer> getLayers(Collection<Module> modules) {
+		List<Layer> result = new ArrayList<>(modules.size() + 2);
+		for (Module m : modules) {
+			result.add(m.getLayer());
+		}
+		// always add the system.bundle layer (which has boot as parent)
+		result.add(systemModule.getLayer());
+		return result;
 	}
 
 	@Override
@@ -388,15 +320,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			// need to make sure the class loader is associated with a layer before allowing a class define
 			layersRead.lock();
 			try {
-				if (previousLayerFailure != null) {
-					return;
-				}
-				createNewLayer = current == null || current.findWiring(wovenClass.getBundleWiring()) == null;
+				// check if there is an existing module for this wiring
+				createNewLayer = wiringToModule.get(wovenClass.getBundleWiring()) == null;
 			} finally {
 				layersRead.unlock();
 			}
 			if (createNewLayer) {
-				createNewBundleLayer();
+				createNewWiringLayers();
 			}
 		}
 	}
@@ -407,38 +337,19 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		case BundleEvent.UNINSTALLED:
 		case BundleEvent.UNRESOLVED:
 		case BundleEvent.UPDATED:
-			// any of the above events cause the layer with the
+			// any of the above events can cause a layer with the
 			// bundle to become invalidated.
-			invalidateLayer(event.getBundle());
+			createNewWiringLayers();
 			break;
-		case BundleEvent.RESOLVED:
-			// clear fail flag to try again
-			clearFailedFlag();
 		default:
 			break;
 		}
 	}
 
-	private void clearFailedFlag() {
-		layersWrite.lock();
-		try {
-			previousLayerFailure = null;
-		} finally {
-			layersWrite.unlock();
-		}
-	}
-
-	private void invalidateLayer(Bundle bundle) {
-		layersRead.lock();
-		try {
-			if (current != null) {
-				BundleLayer containingLayer = current.findBundle(bundle);
-				if (!containingLayer.wirings.get(bundle).isCurrent()) {
-					containingLayer.isValid.set(false);
-				}
-			}
-		} finally {
-			layersRead.unlock();
+	@Override
+	public void frameworkEvent(FrameworkEvent event) {
+		if (event.getType() == FrameworkEvent.PACKAGES_REFRESHED) {
+			createNewWiringLayers();
 		}
 	}
 
@@ -446,5 +357,4 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	public void weave(WovenClass wovenClass) {
 		// do nothing; just need to make sure there is a hook so the WovenClassListener will get called
 	}
-
 }

@@ -21,6 +21,7 @@ package osgi.jpms.layer;
 import java.lang.reflect.Layer;
 import java.nio.file.Path;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
@@ -35,6 +36,9 @@ public interface LayerFactory {
 	 * Framework.
 	 */
 	public interface NamedLayer {
+		public enum Event {
+			INVALID;
+		}
 		/**
 		 * The layer that resolved JPMS modules.  The parent of this layer
 		 * is the layer containing modules representing OSGi bundles.
@@ -59,6 +63,11 @@ public interface LayerFactory {
 		 * @return true if this named layer is valid; otherwise false is returned
 		 */
 		public boolean isValid();
+
+		/**
+		 * Adds a consumer for consuming events related to this named layer
+		 */
+		void consumeEvents(Consumer<Event> consumer);
 	}
 
 	/**

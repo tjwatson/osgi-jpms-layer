@@ -18,19 +18,16 @@
  */
 package osgi.jpms.internal.layer;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Layer;
 import java.lang.reflect.Method;
 import java.lang.reflect.Module;
 import java.security.ProtectionDomain;
+import java.util.Collection;
 import java.util.HashMap;
-import java.util.Map;
-import java.util.Set;
-import java.util.WeakHashMap;
 import java.util.function.BiConsumer;
-
-import org.eclipse.osgi.storage.StorageUtil;
 
 public class AddReadsUtil {
 	private static final String ADD_READS_CLASS_NAME = "osgi.jpms.internal.layer.addreads.AddReadsConsumer";
@@ -57,7 +54,7 @@ public class AddReadsUtil {
 			// sun.misc.Unsafe.defineClass(String, byte[], int, int, ClassLoader, ProtectionDomain)
 			defineClass = unsafeClass.getMethod("defineClass", String.class, byte[].class, int.class, int.class, ClassLoader.class, ProtectionDomain.class); //$NON-NLS-1$
 
-			bytes = StorageUtil.getBytes(AddReadsUtil.class.getResource(ADD_READS_CLASS_RESOURCE).openStream(), -1, 4000);
+			bytes = getBytes(AddReadsUtil.class.getResource(ADD_READS_CLASS_RESOURCE).openStream(), -1, 4000);
 		} catch (Throwable t) {
 			error = t;
 		}
@@ -67,16 +64,57 @@ public class AddReadsUtil {
 		ERROR= error;
 	}
 
+	public static byte[] getBytes(InputStream in, int length, int BUF_SIZE) throws IOException {
+		byte[] classbytes;
+		int bytesread = 0;
+		int readcount;
+		try {
+			if (length > 0) {
+				classbytes = new byte[length];
+				for (; bytesread < length; bytesread += readcount) {
+					readcount = in.read(classbytes, bytesread, length - bytesread);
+					if (readcount <= 0) /* if we didn't read anything */
+						break; /* leave the loop */
+				}
+			} else /* does not know its own length! */ {
+				length = BUF_SIZE;
+				classbytes = new byte[length];
+				readloop: while (true) {
+					for (; bytesread < length; bytesread += readcount) {
+						readcount = in.read(classbytes, bytesread, length - bytesread);
+						if (readcount <= 0) /* if we didn't read anything */
+							break readloop; /* leave the loop */
+					}
+					byte[] oldbytes = classbytes;
+					length += BUF_SIZE;
+					classbytes = new byte[length];
+					System.arraycopy(oldbytes, 0, classbytes, 0, bytesread);
+				}
+			}
+			if (classbytes.length > bytesread) {
+				byte[] oldbytes = classbytes;
+				classbytes = new byte[bytesread];
+				System.arraycopy(oldbytes, 0, classbytes, 0, bytesread);
+			}
+		} finally {
+			try {
+				in.close();
+			} catch (IOException ee) {
+				// nothing to do here
+			}
+		}
+		return classbytes;
+	}
+
 	static void checkForError() {
 		if (ERROR != null) {
 			throw new IllegalStateException("Error initializing addReads.", ERROR);
 		}
 	}
 	
-	private static final WeakHashMap<Module, Class<BiConsumer<Module, Module>>> addReadsClasses = new WeakHashMap<>(); 
+	private static final HashMap<Module, Class<BiConsumer<Module, Module>>> addReadsClasses = new HashMap<>(); 
 	@SuppressWarnings("unchecked")
 	static void defineAddReadsConsumer(Layer layer) {
-		checkForError();
 		for (Module module : layer.modules()) {
 			try {
 				Class<?> clazz = (Class<?>) DEFINE_CLASS.invoke(UNSAFE, ADD_READS_CLASS_NAME, BYTES, Integer.valueOf(0), Integer.valueOf(BYTES.length), module.getClassLoader(), AddReadsUtil.class.getProtectionDomain());
@@ -90,7 +128,11 @@ public class AddReadsUtil {
 		}
 	}
 
-	static void addReads(Module wantsRead, Set<Module> toTargets) {
+	static void clearAddReadsCunsumer(Module module) {
+		addReadsClasses.remove(module);
+	}
+
+	static void addReads(Module wantsRead, Collection<Module> toTargets) {
 		try {
 			Class<BiConsumer<Module, Module>> addReadsConsumer = addReadsClasses.get(wantsRead);
 			BiConsumer<Module, Module> addReads = addReadsConsumer.getConstructor().newInstance();

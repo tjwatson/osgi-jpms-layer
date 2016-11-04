@@ -26,17 +26,15 @@ import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Arrays;
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.HashSet;
-import java.util.Map;
-import java.util.Map.Entry;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
-import org.eclipse.osgi.util.ManifestElement;
-import org.osgi.framework.BundleException;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleWiring;
@@ -46,34 +44,61 @@ import org.osgi.framework.wiring.BundleWiring;
  *
  */
 public class BundleLayerFinder implements ModuleFinder {
-	private final Map<String, ModuleReference> moduleReferences;
+	final String name;
+	final ModuleReference moduleRef;
 
 	/**
-	 * Creates a module finder for finding module references that represent
-	 * resolved bundles
+	 * Creates a module finder for a single bundle module reference.
 	 * @param wirings a mapping of module names to bundle wirings.  The bundle
 	 * wiring will be used to back a module with a name of the key value.
 	 */
-	public BundleLayerFinder(Map<String, BundleWiring> wirings) {
-		moduleReferences = new HashMap<>();
-		for (Map.Entry<String, BundleWiring> wiringEntry : wirings.entrySet()) {
-			moduleReferences.put(wiringEntry.getKey(), createModuleReference(wiringEntry));
-		}
+	public BundleLayerFinder(BundleWiring wiring) {
+		String bsn = wiring.getRevision().getSymbolicName();
+		name = bsn == null ? "" : bsn;
+		moduleRef = createModuleReference(name, wiring);
 	}
-	private ModuleReference createModuleReference(Entry<String, BundleWiring> wiringEntry) {
-		// Simplistic Builder that only fills in the module:
+
+	private static ModuleReference createModuleReference(String name, final BundleWiring wiring) {
+		// Simplistic Builder that only fills in the modules:
+		// name
+		// version
+		// package exports
+		// package contains
+
 		// name -> bundle bsn
+		Builder builder = ModuleDescriptor.openModule(name);
 		// version -> bundle version
+		builder.version(wiring.getBundle().getVersion().toString());
+
 		// exports -> wirings package capabilities
-		Builder builder = ModuleDescriptor.module(wiringEntry.getKey());
-		builder.version(wiringEntry.getValue().getBundle().getVersion().toString());
-		for (BundleCapability packageCap : wiringEntry.getValue().getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+		addExports(builder, wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE));
+
+		// privates -> all packages contained in bundle class path
+		addPrivates(builder, wiring);
+
+		// TODO hack to enable addReads
+		builder.contains("osgi.jpms.internal.layer.addreads");
+		ModuleDescriptor desc = builder.build();
+		return new ModuleReference(desc, null, () -> {return getReader(wiring);});
+	}
+
+	private static void addExports(Builder builder, List<BundleCapability> packages) {
+		for (BundleCapability packageCap : packages) {
 			// we only care about non-internal and non-friends-only packages
-			if (packageCap.getDirectives().get("x-internal") == null && packageCap.getDirectives().get("x-friends") == null) {
+			if (packageCap.getDirectives().get("x-internal") == null) {
+				String friendsDir = packageCap.getDirectives().get("x-friends");
+				String[] friends = friendsDir == null ? new String[0] : friendsDir.split(",");
 				String packageName = (String) packageCap.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE);
 				try {
-					builder.exports(packageName);
-					builder.opens(packageName);
+					if (friends.length > 0) {
+						for (int i = 0; i < friends.length; i++) {
+							friends[i] = friends[i].trim();
+						}
+						// did not use Set.of(E...) because of bad meta-data that can have duplicate friends
+						builder.exports(packageName, new HashSet<>(Arrays.asList(friends)));
+					} else {
+						builder.exports(packageName);
+					}
 				} catch (IllegalStateException e) {
 					// ignore duplicates
 				} catch (IllegalArgumentException e) {
@@ -81,60 +106,58 @@ public class BundleLayerFinder implements ModuleFinder {
 				}
 			}
 		}
-		// Look for private packages.  Each private package needs to be known
-		// to the JPMS otherwise the classes in them will be associated with the
-		// unknown module.  For now use the Private-Package header, should also do some
-		// scanning of the bundle when they don't have this header.
-		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
-		// Can the Layer API be enhanced to map a classloader to a default module to use? 
-		String privatePackage = wiringEntry.getValue().getBundle().getHeaders("").get("Private-Package");
-		try {
-			ManifestElement[] packageElements = ManifestElement.parseHeader("Private-Package", privatePackage);
-			if (packageElements != null) {
-				for (ManifestElement packageElement : packageElements) {
-					for (String packageName : packageElement.getValueComponents()) {
-						try {
-							builder.opens(packageName);
-						} catch (IllegalStateException e) {
-							// ignore duplicates
-						} catch (IllegalArgumentException e) {
-							System.err.println("XXX bad package name: " + packageName);
-						}
-					}
-				}
-			} else {
-				// need to discover packages
-				Collection<String> classes = wiringEntry.getValue().listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
-				Set<String> packages = new HashSet<>();
-				for (String path : classes) {
-					int beginIndex = 0;
-					if (path.startsWith("/")) {
-						beginIndex = 1;
-					}
-					int endIndex = path.lastIndexOf('/');
-					path = path.substring(beginIndex, endIndex);
-					packages.add(path.replace('/', '.'));
-				}
-				for (String pkg : packages) {
-					try {
-						builder.exports(pkg);
-						builder.opens(pkg);
-					} catch (IllegalStateException e) {
-						// ignore duplicates
-					} catch (IllegalArgumentException e) {
-						System.err.println("XXX bad package name: " + pkg);
-					}
-				}
-			}
-			// TODO hack to enable addReads
-			builder.opens("osgi.jpms.internal.layer.addreads");
-		} catch (BundleException e1) {
-			// ignore and move on
-		}
-		return new ModuleReference(builder.build(), null, () -> {return getReader(wiringEntry.getValue());});
 	}
 
-	private ModuleReader getReader(final BundleWiring bundleWiring) {
+	private static void addPrivates(Builder builder, BundleWiring wiring) {
+		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
+		// Can the Layer API be enhanced to map a classloader to a default module to use? 
+
+		// Look for private packages.  Each private package needs to be known
+		// to the JPMS otherwise the classes in them will be associated with the
+		// unknown module.
+		// Look now the Private-Package header bnd produces
+		String privatePackages = wiring.getBundle().getHeaders("").get("Private-Package");
+		if (privatePackages != null) {
+			// very simplistic parsing here
+			String[] privates = privatePackages.split(",");
+			for (String packageName : privates) {
+				try {
+					builder.contains(packageName.trim());
+				} catch (IllegalStateException e) {
+					// ignore duplicates
+				} catch (IllegalArgumentException e) {
+					e.printStackTrace();
+					System.err.println("XXX bad package name: " + packageName);
+				}
+			}
+		} else {
+			// TODO consider caching this since it can be costly to do search
+			// need to discover packages the hard way
+			Collection<String> classes = wiring.listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
+			Set<String> packages = new HashSet<>();
+			for (String path : classes) {
+				int beginIndex = 0;
+				if (path.startsWith("/")) {
+					beginIndex = 1;
+				}
+				int endIndex = path.lastIndexOf('/');
+				path = path.substring(beginIndex, endIndex);
+				packages.add(path.replace('/', '.'));
+			}
+			for (String pkg : packages) {
+				try {
+					builder.contains(pkg);
+				} catch (IllegalStateException e) {
+					// ignore duplicates
+				} catch (IllegalArgumentException e) {
+					e.printStackTrace();
+					System.err.println("XXX bad package name: " + pkg);
+				}
+			}
+		}
+	}
+
+	private static ModuleReader getReader(BundleWiring wiring) {
 		// Pretty sure this never used, but it is possible the
 		// jpms layer above would want to get resources out of modules
 		// in the bundle layer.  This code would provide that access.  
@@ -151,10 +174,10 @@ public class BundleLayerFinder implements ModuleFinder {
 					path = "";
 					filePattern = name;
 				}
-				Collection<String> resources = bundleWiring.listResources(path, filePattern, BundleWiring.LISTRESOURCES_LOCAL);
+				Collection<String> resources = wiring.listResources(path, filePattern, BundleWiring.LISTRESOURCES_LOCAL);
 				URI uri;
 				try {
-					uri = resources.isEmpty() ? null : bundleWiring.getClassLoader().getResource(name).toURI();
+					uri = resources.isEmpty() ? null : wiring.getClassLoader().getResource(name).toURI();
 				} catch (URISyntaxException e) {
 					uri = null;
 				}
@@ -174,12 +197,12 @@ public class BundleLayerFinder implements ModuleFinder {
 
 	@Override
 	public Optional<ModuleReference> find(String name) {
-		return Optional.ofNullable(moduleReferences.get(name));
+		return Optional.ofNullable(this.name.equals(name) ? moduleRef : null);
 	}
 
 	@Override
 	public Set<ModuleReference> findAll() {
-		return new HashSet<>(moduleReferences.values());
+		return Collections.singleton(moduleRef);
 	}
 
 }
