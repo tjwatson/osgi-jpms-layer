@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 
 import org.osgi.framework.Bundle;
@@ -78,6 +79,19 @@ public class Activator implements BundleActivator {
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".C");
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".A");
 			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".B");
+			tryUseFactory(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".UseACallableFactory");
+		}
+	}
+
+	private void tryUseFactory(Layer layer, String moduleName, String className) {
+		try {
+			@SuppressWarnings("unchecked")
+			Class<Callable<String>> c = (Class<Callable<String>>) layer.findLoader(moduleName).loadClass(className);
+			System.out.println("    SUCCESS: " + c + " from->" + c.getModule() + " SUPER: " + c.getSuperclass() + " from->" + c.getSuperclass().getModule());
+			Callable<String> callable = c.getConstructor().newInstance();
+			System.out.println("    SUCCESS: " + callable.call());
+		} catch (Throwable t) {
+			System.err.println("    FAILED: " + t.getMessage());
 		}
 	}
 
@@ -85,6 +99,7 @@ public class Activator implements BundleActivator {
 		try {
 			Class<?> c = layer.findLoader(moduleName).loadClass(className);
 			System.out.println("    SUCCESS: " + c + " from->" + c.getModule() + " SUPER: " + c.getSuperclass() + " from->" + c.getSuperclass().getModule());
+			System.out.println("    SUCCESS: " + c.getConstructor().newInstance());
 		} catch (Throwable t) {
 			System.err.println("    FAILED: " + t.getMessage());
 		}
