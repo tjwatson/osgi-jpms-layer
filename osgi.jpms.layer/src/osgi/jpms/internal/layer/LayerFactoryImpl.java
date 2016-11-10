@@ -20,6 +20,7 @@ package osgi.jpms.internal.layer;
 
 import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
+import java.lang.module.ResolutionException;
 import java.lang.reflect.Layer;
 import java.lang.reflect.Module;
 import java.nio.file.Path;
@@ -43,6 +44,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.BundleEvent;
 import org.osgi.framework.Constants;
@@ -53,8 +55,11 @@ import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClass;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
 import org.osgi.framework.namespace.BundleNamespace;
+import org.osgi.framework.namespace.HostNamespace;
+import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 import org.osgi.framework.wiring.BundleRevision;
+import org.osgi.framework.wiring.BundleWire;
 import org.osgi.framework.wiring.BundleWiring;
 import org.osgi.framework.wiring.FrameworkWiring;
 import org.osgi.resource.Requirement;
@@ -69,12 +74,14 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		Collection<Module> allBundleModules = wiringToModule.values();
 		// Not checking for existing edges for simplicity.
 		for (Module module : allBundleModules) {
-			// First add reads to all boot modules.
-			AddReadsUtil.addReads(module, bootModules);
-			// Now ensure bidirectional read of all bundle modules.
-			AddReadsUtil.addReads(module, allBundleModules);
-			// Add read to the system.bundle module.
-			AddReadsUtil.addReads(module, Collections.singleton(systemModule));
+			if (!systemModule.equals(module)) {
+				// First add reads to all boot modules.
+				AddReadsUtil.addReads(module, bootModules);
+				// Now ensure bidirectional read of all bundle modules.
+				AddReadsUtil.addReads(module, allBundleModules);
+				// Add read to the system.bundle module.
+				AddReadsUtil.addReads(module, Collections.singleton(systemModule));
+			}
 		}
 	}
 
@@ -156,6 +163,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
 	private final AtomicLong nextLayerId = new AtomicLong(0);
+	private final ResolutionGraph<BundleWiring, BundlePackage> graph = new ResolutionGraph<>();
 
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
 	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
@@ -176,10 +184,15 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 
 
 	public LayerFactoryImpl(BundleContext context) {
-		fwkWiring = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).adapt(FrameworkWiring.class);
+		Bundle systemBundle = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
+		fwkWiring = systemBundle.adapt(FrameworkWiring.class);
 		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 		layersWrite = lock.writeLock();
 		layersRead = lock.readLock();
+
+		BundleWiring systemWiring = systemBundle.adapt(BundleWiring.class);
+		addToResolutionGraph(Collections.singleton(systemWiring));
+		wiringToModule.put(systemWiring, systemModule);
 	}
 
 	private Set<BundleWiring> getInUseBundleWirings() {
@@ -188,8 +201,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		for (BundleCapability bundleCap : bundles) {
 			BundleRevision revision = bundleCap.getRevision();
 			BundleWiring wiring = revision.getWiring();
-			// Ignore system bundle, we assume the launcher created a layer for the system.bundle module
-			if (wiring != null && wiring.isInUse() && revision.getBundle().getBundleId() != 0) {
+			if (wiring != null && wiring.isInUse()) {
 				wirings.add(wiring);
 			}
 		}
@@ -210,45 +222,211 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 					if (namedLayers != null) {
 						for (NamedLayerImpl namedLayer : namedLayers) {
 							namedLayer.invalidate();
+							moduleToNamedLayers.forEach((k, v) -> v.remove(namedLayer));
 						}
 					}
 					AddReadsUtil.clearAddReadsCunsumer(wiringModule.getValue());
 				}
 			}
 			Set<BundleWiring> currentWirings = getInUseBundleWirings();
+			addToResolutionGraph(currentWirings);
 
-			// create modules for current wirings that don't have layers yet
-			for (BundleWiring wiring : currentWirings) {
-				if (!wiringToModule.containsKey(wiring)) {
-					BundleLayerFinder finder = new BundleLayerFinder(wiring);
-					Configuration config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-					// Map the module names to the wiring class loaders
-					Layer layer = Layer.empty().defineModules(
-							config, 
-							(name) -> {
-								return Optional.ofNullable(
-										finder.name.equals(name) ? wiring : null).map(
-												(w) -> {return w.getClassLoader();}).get();
-							});
-					AddReadsUtil.defineAddReadsConsumer(layer);
-					wiringToModule.put(wiring, layer.modules().iterator().next());
-				}
-			}
+			// create modules for each node in the graph
+			graph.forEach((n) -> createModule(n));
+
 			addReadsNest(wiringToModule);
 		} finally {
 			layersWrite.unlock();
 		}
 	}
 
+	private Module createModule(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
+		Module m = wiringToModule.get(n.getValue());
+		if (m == null) {
+			NodeFinder finder = new NodeFinder(n, true);
+
+			Configuration config;
+			List<Layer> layers;
+			if (canBuildModuleHierarchy(n)) {
+				Set<Module> dependsOn = new HashSet<>();
+				for (ResolutionGraph<BundleWiring, BundlePackage>.Node d : n.dependsOn()) {
+					dependsOn.add(createModule(d));
+				}
+				List<Configuration> configs = new ArrayList<>(dependsOn.size());
+				layers = new ArrayList<>(dependsOn.size());
+				for (Module d : dependsOn) {
+					Layer l = d.getLayer();
+					layers.add(l);
+					configs.add(l.configuration());
+				}
+				if (configs.isEmpty()) {
+					configs.add(Layer.empty().configuration());
+					layers.add(Layer.empty());
+				}
+				try {
+					config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
+				} catch (ResolutionException e) {
+					e.printStackTrace();
+					// well something blew up; try without module Hierarchy
+					finder = new NodeFinder(n, false);
+					config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+					layers = Collections.singletonList(Layer.empty());
+				}
+			} else {
+				// try without module Hierarchy
+				config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+				layers = Collections.singletonList(Layer.empty());
+			}
+			
+			// Map the module names to the wiring class loaders
+			final String finderName = finder.name;
+			Layer layer = Layer.defineModules(
+					config,
+					layers,
+					(name) -> {
+						return Optional.ofNullable(
+								finderName.equals(name) ? n.getValue() : null).map(
+										(w) -> {return w.getClassLoader();}).get();
+					});
+			AddReadsUtil.defineAddReadsConsumer(layer);
+			m = layer.modules().iterator().next();
+			wiringToModule.put(n.getValue(), m);
+		}
+		return m;
+	}
+
+	static boolean canBuildModuleHierarchy(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
+		return !(n.hasCycleSources() || n.hasSplitSources());
+	}
+
+	private void addToResolutionGraph(Set<BundleWiring> currentWirings) {
+		currentWirings.forEach((w) -> addToGraph(w));
+		for (Iterator<ResolutionGraph<BundleWiring, BundlePackage>.Node> nodes = graph.iterator(); nodes.hasNext();) {
+			ResolutionGraph<BundleWiring, BundlePackage>.Node n = nodes.next();
+			if (!currentWirings.contains(n.getValue()) && n.getValue().getBundle().getBundleId() != 0) {
+				nodes.remove();
+			} else {
+				addWires(n);
+			}
+		}
+		graph.populateSources();
+	}
+
+	private void addWires(ResolutionGraph<BundleWiring, BundlePackage>.Node tail) {
+		if (tail.isPopulated()) {
+			return;
+		}
+		List<BundleWire> pkgWires = tail.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
+		for (BundleWire pkgWire : pkgWires) {
+			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(pkgWire.getProviderWiring());
+			BundlePackage importPackage = BundlePackage.createSimplePackage((String) pkgWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)); 
+			graph.addWire(tail, importPackage , head, false);
+		}
+		List<BundleWire> bundleWires = tail.getValue().getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE);
+		for (BundleWire bundleWire : bundleWires) {
+			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(bundleWire.getProviderWiring());
+			graph.addWire(tail, null, head, BundleNamespace.VISIBILITY_REEXPORT.equals(bundleWire.getRequirement().getDirectives().get(BundleNamespace.REQUIREMENT_VISIBILITY_DIRECTIVE)));
+		}
+	}
+
+	private void addToGraph(BundleWiring w) {
+		if (graph.getNode(w) == null) {
+			Set<BundlePackage> exports = getExports(w);
+			Set<BundlePackage> substitutes = getSubstitutes(w, exports);
+			Set<BundlePackage> privates = getPrivates(w, exports);
+			graph.addNode(w, exports, substitutes, privates);
+		}
+	}
+
+	private static Set<BundlePackage> getSubstitutes(BundleWiring w, Set<BundlePackage> exports) {
+		Set<BundlePackage> results = new HashSet<>();
+		for (BundleCapability export : w.getRevision().getDeclaredCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+			results.add(BundlePackage.createSimplePackage((String) export.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)));
+		}
+		for (BundleWire hostWire : w.getProvidedWires(HostNamespace.HOST_NAMESPACE)) {
+			for (BundleCapability export : hostWire.getRequirer().getDeclaredCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+				results.add(BundlePackage.createSimplePackage((String) export.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)));
+			}
+		}
+		results.removeAll(exports);
+		return results;
+	}
+
+	private static Set<BundlePackage> getExports(BundleWiring wiring) {
+		Set<BundlePackage> results = new HashSet<>();
+		for (BundleCapability export : wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+			results.add(BundlePackage.createExportPackage(export));
+		}
+		return results;
+	}
+
+	private static Set<BundlePackage> getPrivates(BundleWiring wiring, Set<BundlePackage> exports) {
+		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
+		// Can the Layer API be enhanced to map a classloader to a default module to use? 
+
+		Set<BundlePackage> results = new HashSet<>();
+		// Look for private packages.  Each private package needs to be known
+		// to the JPMS otherwise the classes in them will be associated with the
+		// unknown module.
+		// Look now the Private-Package header bnd produces
+		String privatePackages = wiring.getBundle().getHeaders("").get("Private-Package");
+		if (privatePackages != null) {
+			// very simplistic parsing here
+			String[] privates = privatePackages.split(",");
+			for (String packageName : privates) {
+				results.add(BundlePackage.createSimplePackage(packageName));
+			}
+		} else {
+			// TODO consider caching this since it can be costly to do search
+			// need to discover packages the hard way
+			Collection<String> classes = wiring.listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
+			for (String path : classes) {
+				int beginIndex = 0;
+				if (path.startsWith("/")) {
+					beginIndex = 1;
+				}
+				int endIndex = path.lastIndexOf('/');
+				path = path.substring(beginIndex, endIndex);
+				results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
+			}
+		}
+		results.removeAll(exports);
+		return results;
+	}
+
 	private NamedLayer createLayer(LoaderType type, String name, Set<Path> paths, Set<String> roots, ClassLoader parent, Function<String, ClassLoader> mappedLoaders) {
 		ModuleFinder finder = ModuleFinder.of(paths.toArray(new Path[0]));
+		Set<String> required = new HashSet<>();
+		for (String root : roots) {
+			finder.find(root).ifPresent((ref) -> {
+				ref.descriptor().requires().forEach((req) -> required.add(req.name()));
+			});
+		}
 		layersWrite.lock();
 		try {
 			createNewWiringLayers();
-			Collection<Module> modules = wiringToModule.values();
-			List<Configuration> configurations = getConfigurations(modules);
-			List<Layer> layers = getLayers(modules);
-			Configuration config = Configuration.resolveRequires(finder, configurations, ModuleFinder.of(), roots);
+			// TODO not an optimized lookup here for the requires
+			List<Module> dependsOn = new ArrayList<>();
+			for (String r : required) {
+				for (Module m : wiringToModule.values()) {
+					if (r.equals(m.getName())) {
+						dependsOn.add(m);
+						break;
+					}
+				}
+			}
+			List<Configuration> configs = new ArrayList<>(dependsOn.size() + 1);
+			List<Layer> layers = new ArrayList<>(dependsOn.size() + 1);
+			for (Module d : dependsOn) {
+				Layer l = d.getLayer();
+				layers.add(l);
+				configs.add(l.configuration());
+			}
+			// always add the system layer/configuration which give access to boot
+			layers.add(systemModule.getLayer());
+			configs.add(systemModule.getLayer().configuration());
+
+			Configuration config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), roots);
 			Layer layer;
 			switch (type) {
 				case OneLoader:
@@ -264,38 +442,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 					throw new IllegalArgumentException(type.toString());
 			}
 			NamedLayerImpl result = new NamedLayerImpl(layer, name);
-			for (Module m : modules) {
-				Collection<NamedLayerImpl> children = moduleToNamedLayers.get(m);
-				if (children == null) {
-					children = new ArrayList<>();
-					moduleToNamedLayers.put(m, children);
-				}
-				children.add(result);
+			for (Module m : dependsOn) {
+				moduleToNamedLayers.computeIfAbsent(m, (k) -> new ArrayList<>()).add(result);
 			}
 			return result;
 		} finally {
 			layersWrite.unlock();
 		}
-	}
-
-	private static List<Configuration> getConfigurations(Collection<Module> modules) {
-		List<Configuration> result = new ArrayList<>(modules.size());
-		for (Module m : modules) {
-			result.add(m.getLayer().configuration());
-		}
-		// always add the system.bundle configuration (which has boot as parent)
-		result.add(systemModule.getLayer().configuration());
-		return result;
-	}
-
-	private List<Layer> getLayers(Collection<Module> modules) {
-		List<Layer> result = new ArrayList<>(modules.size() + 2);
-		for (Module m : modules) {
-			result.add(m.getLayer());
-		}
-		// always add the system.bundle layer (which has boot as parent)
-		result.add(systemModule.getLayer());
-		return result;
 	}
 
 	@Override
