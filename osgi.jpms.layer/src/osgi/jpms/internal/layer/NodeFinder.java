@@ -21,6 +21,7 @@ package osgi.jpms.internal.layer;
 import java.io.IOException;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleDescriptor.Builder;
+import java.lang.module.ModuleDescriptor.Requires.Modifier;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
@@ -28,6 +29,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -67,16 +69,20 @@ public class NodeFinder implements ModuleFinder {
 		node.getPrivates().forEach((p) -> p.addPrivate(builder));
 
 		if (includeRequires && LayerFactoryImpl.canBuildModuleHierarchy(node)) {
-			node.dependsOn().forEach((n) -> {
-				BundleRevision r = n.getValue().getRevision();
+			for (ResolutionGraph<BundleWiring, BundlePackage>.Node dependency : node.dependsOn()) {
+				BundleRevision r = dependency.getValue().getRevision();
 				String bsn;
 				if (r.getBundle().getBundleId() == 0) {
 					bsn = Constants.SYSTEM_BUNDLE_SYMBOLICNAME;
 				} else {
 					bsn = r.getSymbolicName();
 				}
-				builder.requires(bsn);
-			});
+				if (node.isTransitive(dependency)) {
+					builder.requires(EnumSet.of(Modifier.TRANSITIVE), bsn);
+				} else {
+					builder.requires(bsn);
+				}
+			}
 		}
 
 		// TODO hack to enable addReads

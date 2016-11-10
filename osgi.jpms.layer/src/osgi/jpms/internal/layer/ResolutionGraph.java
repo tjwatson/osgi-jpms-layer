@@ -33,6 +33,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 		private final Set<P> privates;
 		private final Map<P, Set<Node>> sources;
 		private final Set<Node> dependsOn;
+		private final Set<Node> transitives;
 		private final Set<Wire> requiredWires;
 		private boolean sourcesPopulated = false;
 		private boolean checkedCycles = false;
@@ -47,6 +48,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			this.sources = new HashMap<>();
 			this.requiredWires = new HashSet<>();
 			this.dependsOn = new HashSet<>();
+			this.transitives = new HashSet<>();
 		}
 		public V getValue() {
 			return v;
@@ -70,6 +72,10 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 
 		public Set<Node> dependsOn() {
 			return dependsOn;
+		}
+
+		public boolean isTransitive(Node node) {
+			return transitives.contains(node);
 		}
 
 		@SuppressWarnings("rawtypes")
@@ -102,9 +108,9 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 
 			Set<P> singles = new HashSet<>();
 			for (Wire w : requiredWires) {
-				if (w.single != null) {
-					singles.add(w.single);
-					w.head.addSingleSource(this, w.single, new HashSet<>());
+				if (w.getSingle() != null) {
+					singles.add(w.getSingle());
+					w.getHead().addSingleSource(this, w.getSingle(), new HashSet<>());
 				}
 			}
 
@@ -115,8 +121,11 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			}
 
 			for (Wire wire : requiredWires) {
-				if (wire.single == null) {
-					wire.head.addMultiSource(this, singles);
+				if (wire.getSingle() == null) {
+					wire.getHead().addMultiSource(this, singles);
+					if (wire.isTransitive()) {
+						transitives.add(wire.getHead());
+					}
 				}
 			}
 		}
@@ -156,8 +165,8 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 				tail.addToSources(p, this);
 				// look at all non-single wires; if this node provides p
 				for (Wire w : requiredWires) {
-					if (w.single == null) {
-						w.head.addSingleSource(tail, p, visited);
+					if (w.getSingle() == null) {
+						w.getHead().addSingleSource(tail, p, visited);
 					}
 				}
 			}
@@ -170,12 +179,12 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 				}
 			}
 			for (Wire w : requiredWires) {
-				if (w.single != null) {
-					if (substitutes.contains(w.single)) {
-						w.head.addSingleSource(tail, w.single, new HashSet<>());
+				if (w.getSingle() != null) {
+					if (substitutes.contains(w.getSingle())) {
+						w.getHead().addSingleSource(tail, w.getSingle(), new HashSet<>());
 					}
 				} else if (w.isTransitive()) {
-					w.head.addMultiSource(tail, singles);
+					w.getHead().addMultiSource(tail, singles);
 				}
 			}
 		}
@@ -206,7 +215,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			return single;
 		}
 
-		boolean isTransitive() {
+		public boolean isTransitive() {
 			return transitive;
 		}
 	}
