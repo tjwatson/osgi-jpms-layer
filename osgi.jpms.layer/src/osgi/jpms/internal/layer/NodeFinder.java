@@ -51,20 +51,28 @@ public class NodeFinder implements ModuleFinder {
 	 * @param wirings a mapping of module names to bundle wirings.  The bundle
 	 * wiring will be used to back a module with a name of the key value.
 	 */
-	public NodeFinder(ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
+	public NodeFinder(Activator activator, ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
 		String bsn = node.getValue().getRevision().getSymbolicName();
 		name = bsn == null ? "" : bsn;
-		moduleRef = createModuleReference(name, node, includeRequires);
+		moduleRef = createModuleReference(activator, name, node, includeRequires);
 	}
 
-	private static ModuleReference createModuleReference(String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
+	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
 		// name -> bundle bsn
 		Builder builder = ModuleDescriptor.openModule(name);
 		// version -> bundle version
 		builder.version(node.getValue().getBundle().getVersion().toString());
 
 		// exports -> wirings package capabilities
-		node.getProvides().forEach((p) -> p.addExport(builder));
+		node.getProvides().forEach((p) -> {
+			try {
+				p.addExport(builder);
+			} catch(IllegalArgumentException e) {
+				activator.logError("Bad package in: " + name, e);
+			} catch (IllegalStateException e) {
+				activator.logError("Bad package in: " + name, e);
+			}
+		});
 		// privates -> all packages contained in bundle class path
 		node.getPrivates().forEach((p) -> p.addPrivate(builder));
 

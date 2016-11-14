@@ -36,6 +36,7 @@ import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -159,6 +160,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	};
 
 	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
+	private final Activator activator;
 	private final FrameworkWiring fwkWiring;
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
@@ -183,7 +185,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	});
 
 
-	public LayerFactoryImpl(BundleContext context) {
+	public LayerFactoryImpl(Activator activator, BundleContext context) {
+		this.activator = activator;
 		Bundle systemBundle = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
 		fwkWiring = systemBundle.adapt(FrameworkWiring.class);
 		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
@@ -209,14 +212,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	}
 
 	private void createNewWiringLayers() {
+		long start = System.nanoTime();
 		layersWrite.lock();
 		try {
 			// first clean up layers that are not in use anymore
 			for (Iterator<Entry<BundleWiring, Module>> wirings = wiringToModule.entrySet().iterator(); wirings.hasNext();) {
 				Entry<BundleWiring, Module> wiringModule = wirings.next();
 				if (!wiringModule.getKey().isInUse()) {
-					// remove the wiring no long in use
-					wirings.remove();
 					// invalidate any named layers that used it
 					Collection<NamedLayerImpl> namedLayers = moduleToNamedLayers.remove(wiringModule.getValue());
 					if (namedLayers != null) {
@@ -226,10 +228,14 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 						}
 					}
 					AddReadsUtil.clearAddReadsCunsumer(wiringModule.getValue());
+					// remove the wiring no long in use
+					wirings.remove();
 				}
 			}
+			long graphStart = System.nanoTime();
 			Set<BundleWiring> currentWirings = getInUseBundleWirings();
 			addToResolutionGraph(currentWirings);
+			System.out.println("Time update graph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - graphStart), TimeUnit.NANOSECONDS));
 
 			// create modules for each node in the graph
 			graph.forEach((n) -> createModule(n));
@@ -237,13 +243,14 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			addReadsNest(wiringToModule);
 		} finally {
 			layersWrite.unlock();
+			System.out.println("Time to create bundle layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
 		}
 	}
 
 	private Module createModule(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
-			NodeFinder finder = new NodeFinder(n, true);
+			NodeFinder finder = new NodeFinder(activator, n, true);
 
 			Configuration config;
 			List<Layer> layers;
@@ -266,13 +273,16 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				try {
 					config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
 				} catch (ResolutionException e) {
-					e.printStackTrace();
+					activator.logError("Resolution error creating layer hierarchy for: " + finder.name, e);
 					// well something blew up; try without module Hierarchy
-					finder = new NodeFinder(n, false);
+					finder = new NodeFinder(activator, n, false);
 					config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
 					layers = Collections.singletonList(Layer.empty());
 				}
 			} else {
+				String cause = n.hasSplitSources() ? " split packages" : "";
+				cause += n.hasCycleSources() ? ((cause.isEmpty() ? " and" : "") + " cycles") : "";
+				activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
 				// try without module Hierarchy
 				config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
 				layers = Collections.singletonList(Layer.empty());
@@ -487,11 +497,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	@Override
 	public void bundleChanged(BundleEvent event) {
 		switch (event.getType()) {
-		case BundleEvent.UNINSTALLED:
 		case BundleEvent.UNRESOLVED:
-		case BundleEvent.UPDATED:
-			// any of the above events can cause a layer with the
-			// bundle to become invalidated.
+			// only create new wiring to flush out old stuff
 			createNewWiringLayers();
 			break;
 		default:

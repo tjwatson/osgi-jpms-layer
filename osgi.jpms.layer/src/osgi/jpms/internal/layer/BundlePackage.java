@@ -72,16 +72,10 @@ public class BundlePackage {
 	}
 
 	void addExport(Builder builder) {
-		try {
-			if (friends.isEmpty()) {
-				builder.exports(name);
-			} else {
-				builder.exports(name, friends);
-			}
-		} catch(IllegalArgumentException e) {
-			e.printStackTrace();
-		} catch (IllegalStateException e) {
-			e.printStackTrace();
+		if (friends.isEmpty()) {
+			builder.exports(name);
+		} else {
+			builder.exports(name, friends);
 		}
 	}
 

@@ -18,18 +18,23 @@
  */
 package osgi.jpms.internal.layer;
 
+import java.lang.reflect.Method;
+
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
 import org.osgi.framework.Constants;
 import org.osgi.framework.ServiceRegistration;
 import org.osgi.framework.hooks.weaving.WeavingHook;
 import org.osgi.framework.hooks.weaving.WovenClassListener;
+import org.osgi.util.tracker.ServiceTracker;
 
 import osgi.jpms.layer.LayerFactory;
 
 public class Activator implements BundleActivator {
+	private static String LOG_SERVICE = "org.osgi.service.log.LogService";
 	private ServiceRegistration<?> factoryReg;
 	private LayerFactoryImpl factory;
+	private ServiceTracker<Object, Object> logService;
 	@Override
 	public void start(BundleContext context) {
 		// Check that the launcher created a layer for the framework
@@ -38,8 +43,10 @@ public class Activator implements BundleActivator {
 		}
 		// ensure the add reads hack is working
 		AddReadsUtil.checkForError();
+		logService = new ServiceTracker<>(context, LOG_SERVICE, null);
+		logService.open();
 		// Create the LayerFactory implementation and register it
-		factory = new LayerFactoryImpl(context);
+		factory = new LayerFactoryImpl(this, context);
 		// The factory is a bundle listener to keep track of resolved bundles
 		context.addBundleListener(factory);
 		// The factory is also a WovenClassListener to intercept bundle class loaders before
@@ -55,6 +62,29 @@ public class Activator implements BundleActivator {
 			factoryReg.unregister();
 			context.removeBundleListener(factory);
 		}
+
+		logService.close();
 	}
+
+	public void logError(String msg, Throwable t) {
+		Object logger = logService.getService();
+		if (logger != null) {
+			for (Class<?> implementing:  logger.getClass().getInterfaces()) {
+				if (LOG_SERVICE.equals(implementing.getName())) {
+					try {
+						Method log = implementing.getMethod("log", int.class, String.class, Throwable.class);
+						log.invoke(logger, 1, msg, t);
+						return;
+					} catch (Exception e) {
+						// ignore
+					}
+				}
+			}
+		}
+		System.out.println(msg);
+		t.printStackTrace();
+	}
+
+	
 
 }
