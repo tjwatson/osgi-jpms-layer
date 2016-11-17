@@ -76,7 +76,7 @@ public class NodeFinder implements ModuleFinder {
 		// privates -> all packages contained in bundle class path
 		node.getPrivates().forEach((p) -> p.addPrivate(builder));
 
-		if (includeRequires && LayerFactoryImpl.canBuildModuleHierarchy(node)) {
+		if (includeRequires) {
 			for (ResolutionGraph<BundleWiring, BundlePackage>.Node dependency : node.dependsOn()) {
 				BundleRevision r = dependency.getValue().getRevision();
 				String bsn;

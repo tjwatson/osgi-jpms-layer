@@ -18,10 +18,17 @@
  */
 package osgi.jpms.internal.layer;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ResolutionException;
 import java.lang.reflect.Layer;
+import java.lang.reflect.LayerInstantiationException;
 import java.lang.reflect.Module;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -160,12 +167,14 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	};
 
 	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
+	private final static String CACHE_FILE = "osgi.jpms.layer/privates.cache";
 	private final Activator activator;
 	private final FrameworkWiring fwkWiring;
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
 	private final AtomicLong nextLayerId = new AtomicLong(0);
 	private final ResolutionGraph<BundleWiring, BundlePackage> graph = new ResolutionGraph<>();
+	private final BundleWiringPrivates privatesCache;
 
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
 	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
@@ -186,6 +195,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 
 
 	public LayerFactoryImpl(Activator activator, BundleContext context) {
+		privatesCache = loadPrivatesCache(context);
 		this.activator = activator;
 		Bundle systemBundle = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
 		fwkWiring = systemBundle.adapt(FrameworkWiring.class);
@@ -196,6 +206,55 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		BundleWiring systemWiring = systemBundle.adapt(BundleWiring.class);
 		addToResolutionGraph(Collections.singleton(systemWiring));
 		wiringToModule.put(systemWiring, systemModule);
+	}
+
+	private BundleWiringPrivates loadPrivatesCache(BundleContext context) {
+		File cacheFile = context.getDataFile(CACHE_FILE);
+		if (cacheFile.exists()) {
+		ObjectInputStream ois = null;
+		try {
+			ois = new ObjectInputStream(new FileInputStream(cacheFile));
+			return (BundleWiringPrivates) ois.readObject();
+		} catch (IOException | ClassNotFoundException e) {
+			activator.logError("Failed to load privates cache.", e);
+		} finally {
+			if (ois != null) {
+				try {
+					ois.close();
+				} catch (IOException e) {
+					// ignore
+				}
+			}
+		}
+		}
+		return new BundleWiringPrivates();
+	}
+
+	void savePrivatesCache(BundleContext context) {
+		// first remove any stale wirings
+		Set<BundleWiring> inUseWirings = getInUseBundleWirings();
+		Set<BundleWiringLastModified> lastModified = new HashSet<>();
+		for (BundleWiring wiring : inUseWirings) {
+			lastModified.add(new BundleWiringLastModified(wiring));
+		}
+		privatesCache.retainAll(lastModified);
+		File cacheFile = context.getDataFile(CACHE_FILE);
+		cacheFile.getParentFile().mkdirs();
+		ObjectOutputStream oos = null;
+		try {
+			oos = new ObjectOutputStream(new FileOutputStream(cacheFile));
+			oos.writeObject(privatesCache);
+		} catch (IOException e) {
+			activator.logError("Failed to save privates cache.", e);
+		} finally {
+			if (oos != null) {
+				try {
+					oos.close();
+				} catch (IOException e) {
+					// ignore
+				}
+			}
+		}
 	}
 
 	private Set<BundleWiring> getInUseBundleWirings() {
@@ -215,6 +274,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		long start = System.nanoTime();
 		layersWrite.lock();
 		try {
+			long cleanUpStart = System.nanoTime();
 			// first clean up layers that are not in use anymore
 			for (Iterator<Entry<BundleWiring, Module>> wirings = wiringToModule.entrySet().iterator(); wirings.hasNext();) {
 				Entry<BundleWiring, Module> wiringModule = wirings.next();
@@ -232,13 +292,17 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 					wirings.remove();
 				}
 			}
+			System.out.println("Time to clean up layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - cleanUpStart), TimeUnit.NANOSECONDS));
+
 			long graphStart = System.nanoTime();
 			Set<BundleWiring> currentWirings = getInUseBundleWirings();
 			addToResolutionGraph(currentWirings);
-			System.out.println("Time update graph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - graphStart), TimeUnit.NANOSECONDS));
+			System.out.println("Time to update graph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - graphStart), TimeUnit.NANOSECONDS));
 
+			long moduleCreateStart = System.nanoTime();
 			// create modules for each node in the graph
 			graph.forEach((n) -> createModule(n));
+			System.out.println("Time to create modules: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - moduleCreateStart), TimeUnit.NANOSECONDS));
 
 			addReadsNest(wiringToModule);
 		} finally {
@@ -250,7 +314,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private Module createModule(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
-			NodeFinder finder = new NodeFinder(activator, n, true);
+			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n));
 
 			Configuration config;
 			List<Layer> layers;
@@ -263,8 +327,12 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				layers = new ArrayList<>(dependsOn.size());
 				for (Module d : dependsOn) {
 					Layer l = d.getLayer();
-					layers.add(l);
-					configs.add(l.configuration());
+					if (l != null) {
+						// unnamed modules have no layers.
+						// note that a null layer should result in a resolution error below
+						layers.add(l);
+						configs.add(l.configuration());
+					}
 				}
 				if (configs.isEmpty()) {
 					configs.add(Layer.empty().configuration());
@@ -290,7 +358,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			
 			// Map the module names to the wiring class loaders
 			final String finderName = finder.name;
-			Layer layer = Layer.defineModules(
+			try {
+				Layer layer = Layer.defineModules(
 					config,
 					layers,
 					(name) -> {
@@ -298,8 +367,17 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 								finderName.equals(name) ? n.getValue() : null).map(
 										(w) -> {return w.getClassLoader();}).get();
 					});
-			AddReadsUtil.defineAddReadsConsumer(layer);
-			m = layer.modules().iterator().next();
+				m = layer.modules().iterator().next();
+			} catch (LayerInstantiationException e) {
+				// The most likely cause is because we have loaded classes from the 
+				// class loader before defining the module.
+				// This is possible if the jpms support fragment is installed after
+				// bundle code has been run, for example a provisioning agent.
+				// We fall back to using the unnamed module for the bundle class loader
+				m = n.getValue().getClassLoader().getUnnamedModule();
+				activator.logError("Falling back to unnamed module for: " + n.getValue().getRevision().getSymbolicName(), e);
+			}
+			AddReadsUtil.defineAddReadsConsumer(m);
 			wiringToModule.put(n.getValue(), m);
 		}
 		return m;
@@ -310,7 +388,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	}
 
 	private void addToResolutionGraph(Set<BundleWiring> currentWirings) {
+		long start = System.nanoTime();
 		currentWirings.forEach((w) -> addToGraph(w));
+		System.out.println("Time addToGraph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
 		for (Iterator<ResolutionGraph<BundleWiring, BundlePackage>.Node> nodes = graph.iterator(); nodes.hasNext();) {
 			ResolutionGraph<BundleWiring, BundlePackage>.Node n = nodes.next();
 			if (!currentWirings.contains(n.getValue()) && n.getValue().getBundle().getBundleId() != 0) {
@@ -343,7 +423,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		if (graph.getNode(w) == null) {
 			Set<BundlePackage> exports = getExports(w);
 			Set<BundlePackage> substitutes = getSubstitutes(w, exports);
-			Set<BundlePackage> privates = getPrivates(w, exports);
+			Set<BundlePackage> privates = privatesCache.getPrivates(w, exports);
 			graph.addNode(w, exports, substitutes, privates);
 		}
 	}
@@ -367,40 +447,6 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		for (BundleCapability export : wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
 			results.add(BundlePackage.createExportPackage(export));
 		}
-		return results;
-	}
-
-	private static Set<BundlePackage> getPrivates(BundleWiring wiring, Set<BundlePackage> exports) {
-		// TODO JPMS-ISSUE-002: (Low Priority) Need to scan for private packages.
-		// Can the Layer API be enhanced to map a classloader to a default module to use? 
-
-		Set<BundlePackage> results = new HashSet<>();
-		// Look for private packages.  Each private package needs to be known
-		// to the JPMS otherwise the classes in them will be associated with the
-		// unknown module.
-		// Look now the Private-Package header bnd produces
-		String privatePackages = wiring.getBundle().getHeaders("").get("Private-Package");
-		if (privatePackages != null) {
-			// very simplistic parsing here
-			String[] privates = privatePackages.split(",");
-			for (String packageName : privates) {
-				results.add(BundlePackage.createSimplePackage(packageName));
-			}
-		} else {
-			// TODO consider caching this since it can be costly to do search
-			// need to discover packages the hard way
-			Collection<String> classes = wiring.listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
-			for (String path : classes) {
-				int beginIndex = 0;
-				if (path.startsWith("/")) {
-					beginIndex = 1;
-				}
-				int endIndex = path.lastIndexOf('/');
-				path = path.substring(beginIndex, endIndex);
-				results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
-			}
-		}
-		results.removeAll(exports);
 		return results;
 	}
 

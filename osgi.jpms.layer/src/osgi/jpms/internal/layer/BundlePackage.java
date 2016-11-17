@@ -18,6 +18,7 @@
  */
 package osgi.jpms.internal.layer;
 
+import java.io.Serializable;
 import java.lang.module.ModuleDescriptor.Builder;
 import java.util.Arrays;
 import java.util.Collections;
@@ -27,7 +28,8 @@ import java.util.Set;
 import org.osgi.framework.namespace.PackageNamespace;
 import org.osgi.framework.wiring.BundleCapability;
 
-public class BundlePackage {
+public class BundlePackage implements Serializable {
+	private static final long serialVersionUID = 1L;
 	private final String name;
 	private final Set<String> friends;
 
@@ -44,7 +46,7 @@ public class BundlePackage {
 				friends[i] = friends[i].trim();
 			}
 			// did not use Set.of(E...) because of bad meta-data that can have duplicate friends
-			friendsSet = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(friends)));
+			friendsSet = new HashSet<>(Arrays.asList(friends));
 		}
 		return new BundlePackage(name, friendsSet);
 	}

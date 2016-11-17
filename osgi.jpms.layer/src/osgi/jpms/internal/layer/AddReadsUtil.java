@@ -21,7 +21,6 @@ package osgi.jpms.internal.layer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
-import java.lang.reflect.Layer;
 import java.lang.reflect.Method;
 import java.lang.reflect.Module;
 import java.security.ProtectionDomain;
@@ -114,17 +113,15 @@ public class AddReadsUtil {
 	
 	private static final HashMap<Module, Class<BiConsumer<Module, Module>>> addReadsClasses = new HashMap<>(); 
 	@SuppressWarnings("unchecked")
-	static void defineAddReadsConsumer(Layer layer) {
-		for (Module module : layer.modules()) {
-			try {
-				Class<?> clazz = (Class<?>) DEFINE_CLASS.invoke(UNSAFE, ADD_READS_CLASS_NAME, BYTES, Integer.valueOf(0), Integer.valueOf(BYTES.length), module.getClassLoader(), AddReadsUtil.class.getProtectionDomain());
-				if (!module.equals(clazz.getModule())) {
-					throw new RuntimeException("Failed to define AddReadsConsumer class into module: " + module + " : " + clazz.getModule());
-				}
-				addReadsClasses.put(module, (Class<BiConsumer<Module, Module>>) clazz);
-			} catch (Exception e) {
-				throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException("Error defining addReads", e);
+	static void defineAddReadsConsumer(Module module) {
+		try {
+			Class<?> clazz = (Class<?>) DEFINE_CLASS.invoke(UNSAFE, ADD_READS_CLASS_NAME, BYTES, Integer.valueOf(0), Integer.valueOf(BYTES.length), module.getClassLoader(), AddReadsUtil.class.getProtectionDomain());
+			if (!module.equals(clazz.getModule())) {
+				throw new RuntimeException("Failed to define AddReadsConsumer class into module: " + module + " : " + clazz.getModule());
 			}
+			addReadsClasses.put(module, (Class<BiConsumer<Module, Module>>) clazz);
+		} catch (Exception e) {
+			throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException("Error defining addReads", e);
 		}
 	}
 
