@@ -111,7 +111,7 @@ public class AddReadsUtil {
 		}
 	}
 	
-	private static final HashMap<Module, Class<BiConsumer<Module, Module>>> addReadsClasses = new HashMap<>(); 
+	private static final HashMap<Module, BiConsumer<Module, Module>> addReadsClasses = new HashMap<>(); 
 	@SuppressWarnings("unchecked")
 	static void defineAddReadsConsumer(Module module) {
 		try {
@@ -119,7 +119,7 @@ public class AddReadsUtil {
 			if (!module.equals(clazz.getModule())) {
 				throw new RuntimeException("Failed to define AddReadsConsumer class into module: " + module + " : " + clazz.getModule());
 			}
-			addReadsClasses.put(module, (Class<BiConsumer<Module, Module>>) clazz);
+			addReadsClasses.put(module, (BiConsumer<Module, Module>) clazz.getConstructor().newInstance());
 		} catch (Exception e) {
 			throw (e instanceof RuntimeException) ? (RuntimeException) e : new RuntimeException("Error defining addReads", e);
 		}
@@ -131,8 +131,7 @@ public class AddReadsUtil {
 
 	static void addReads(Module wantsRead, Collection<Module> toTargets) {
 		try {
-			Class<BiConsumer<Module, Module>> addReadsConsumer = addReadsClasses.get(wantsRead);
-			BiConsumer<Module, Module> addReads = addReadsConsumer.getConstructor().newInstance();
+			BiConsumer<Module, Module> addReads = addReadsClasses.get(wantsRead);
 			for (Module toTarget : toTargets) {
 				addReads.accept(wantsRead, toTarget);				
 			}
