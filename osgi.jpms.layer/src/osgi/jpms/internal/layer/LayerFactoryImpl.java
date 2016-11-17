@@ -78,6 +78,7 @@ import osgi.jpms.layer.LayerFactory;
 public class LayerFactoryImpl implements LayerFactory, WovenClassListener, WeavingHook, SynchronousBundleListener, FrameworkListener {
 
 	static void addReadsNest(Map<BundleWiring, Module> wiringToModule) {
+		long addReadsNestStart = System.nanoTime();
 		Set<Module> bootModules = Layer.boot().modules();
 		Collection<Module> allBundleModules = wiringToModule.values();
 		// Not checking for existing edges for simplicity.
@@ -91,6 +92,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				AddReadsUtil.addReads(module, Collections.singleton(systemModule));
 			}
 		}
+		System.out.println("Time to addReadsNest: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - addReadsNestStart), TimeUnit.NANOSECONDS));
 	}
 
 	class NamedLayerImpl implements NamedLayer {
@@ -294,10 +296,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			}
 			System.out.println("Time to clean up layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - cleanUpStart), TimeUnit.NANOSECONDS));
 
-			long graphStart = System.nanoTime();
+			long currentWiringsStart = System.nanoTime();
 			Set<BundleWiring> currentWirings = getInUseBundleWirings();
+			System.out.println("Time to get currentWirings: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - currentWiringsStart), TimeUnit.NANOSECONDS));
+
 			addToResolutionGraph(currentWirings);
-			System.out.println("Time to update graph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - graphStart), TimeUnit.NANOSECONDS));
 
 			long moduleCreateStart = System.nanoTime();
 			// create modules for each node in the graph
@@ -307,7 +310,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			addReadsNest(wiringToModule);
 		} finally {
 			layersWrite.unlock();
-			System.out.println("Time to create bundle layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
+			System.out.println("Total Time to create bundle layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
 		}
 	}
 
@@ -349,7 +352,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				}
 			} else {
 				String cause = n.hasSplitSources() ? " split packages" : "";
-				cause += n.hasCycleSources() ? ((cause.isEmpty() ? " and" : "") + " cycles") : "";
+				cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
 				activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
 				// try without module Hierarchy
 				config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
@@ -388,9 +391,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	}
 
 	private void addToResolutionGraph(Set<BundleWiring> currentWirings) {
-		long start = System.nanoTime();
+		long startAddToGraph = System.nanoTime();
 		currentWirings.forEach((w) -> addToGraph(w));
-		System.out.println("Time addToGraph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
+		System.out.println("Time addToGraph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startAddToGraph), TimeUnit.NANOSECONDS));
+
+		long startAddWires = System.nanoTime();
 		for (Iterator<ResolutionGraph<BundleWiring, BundlePackage>.Node> nodes = graph.iterator(); nodes.hasNext();) {
 			ResolutionGraph<BundleWiring, BundlePackage>.Node n = nodes.next();
 			if (!currentWirings.contains(n.getValue()) && n.getValue().getBundle().getBundleId() != 0) {
@@ -399,7 +404,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				addWires(n);
 			}
 		}
+		System.out.println("Time addWires: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startAddWires), TimeUnit.NANOSECONDS));
+
+		long startPopulateSources = System.nanoTime();
 		graph.populateSources();
+		System.out.println("Time populateSources: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startPopulateSources), TimeUnit.NANOSECONDS));
 	}
 
 	private void addWires(ResolutionGraph<BundleWiring, BundlePackage>.Node tail) {
