@@ -35,8 +35,10 @@ public class Activator implements BundleActivator {
 	private ServiceRegistration<?> factoryReg;
 	private LayerFactoryImpl factory;
 	private ServiceTracker<Object, Object> logService;
+	private volatile boolean logErrors = false;
 	@Override
 	public void start(BundleContext context) {
+		logErrors = Boolean.parseBoolean(context.getProperty("osgi.jpms.layer.log.errors"));
 		// Check that the launcher created a layer for the framework
 		if (!Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(getClass().getModule().getName())) {
 			throw new IllegalStateException("The framework launcher has not setup the system.bundle module for the framework implementation: " + getClass().getModule());
@@ -63,10 +65,14 @@ public class Activator implements BundleActivator {
 			context.removeBundleListener(factory);
 		}
 
+		factory.savePrivatesCache(context);
 		logService.close();
 	}
 
 	public void logError(String msg, Throwable t) {
+		if (!logErrors) {
+			return;
+		}
 		Object logger = logService.getService();
 		if (logger != null) {
 			for (Class<?> implementing:  logger.getClass().getInterfaces()) {
