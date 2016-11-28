@@ -42,10 +42,17 @@ public class Activator implements BundleActivator {
 			refreshed.await();
 
 			testBundleLayer(factory, context);
-		}
-		catch (Throwable t) {
+
+			Bundle aTest = context.installBundle("reference:file:" + context.getProperty("jpms.mods.path") + "/" + "jpms.test.a.jar");
+			aTest.start();
+			Module aModule = factory.getModules().get(aTest);
+			System.out.println("JPMS Test module as a bundle.");
+			tryLoadClasses(aModule.getLayer());
+			aTest.uninstall();
+		} catch (Throwable t) {
 			t.printStackTrace();
 		}
+
 		// shutdown framework at end of test
 		new Thread(() -> {
 			try {
@@ -72,14 +79,18 @@ public class Activator implements BundleActivator {
 		layer2.consumeEvents((e) -> System.out.println(e + ": second consumer"));
 	}
 
-	private void tryLoadClasses(NamedLayer jpmsLayer) {
-		System.out.println(jpmsLayer.getName());
-		for (Module jpmsModule : jpmsLayer.getLayer().modules()) {
+	private void tryLoadClasses(NamedLayer namedLayer) {
+		System.out.println(namedLayer.getName());
+		tryLoadClasses(namedLayer.getLayer());
+	}
+
+	private void tryLoadClasses(Layer layer) {
+		for (Module jpmsModule : layer.modules()) {
 			System.out.println("  " + jpmsModule.getDescriptor());
-			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".C");
-			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".A");
-			tryLoadClass(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".B");
-			tryUseFactory(jpmsLayer.getLayer(), jpmsModule.getName(), jpmsModule.getName() + ".UseACallableFactory");
+			tryLoadClass(layer, jpmsModule.getName(), jpmsModule.getName() + ".C");
+			tryLoadClass(layer, jpmsModule.getName(), jpmsModule.getName() + ".A");
+			tryLoadClass(layer, jpmsModule.getName(), jpmsModule.getName() + ".B");
+			tryUseFactory(layer, jpmsModule.getName(), jpmsModule.getName() + ".UseACallableFactory");
 		}
 	}
 

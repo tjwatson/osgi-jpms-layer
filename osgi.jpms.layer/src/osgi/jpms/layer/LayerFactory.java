@@ -19,10 +19,14 @@
 package osgi.jpms.layer;
 
 import java.lang.reflect.Layer;
+import java.lang.reflect.Module;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+
+import org.osgi.framework.Bundle;
 
 /**
  * The layer factory service is used to create a layer for JPMS modules to
@@ -107,4 +111,10 @@ public interface LayerFactory {
 	 * @see Layer#defineModules(java.lang.module.Configuration, Function)
 	 */
 	NamedLayer createLayerWithMappedLoaders(String name, Set<Path> paths, Set<String> roots, Function<String, ClassLoader> mappedLoaders);
+
+	/**
+	 * Returns a snapshot of the current modules associated with the bundles resolved in the framework.
+	 * @return
+	 */
+	Map<Bundle, Module> getModules();
 }

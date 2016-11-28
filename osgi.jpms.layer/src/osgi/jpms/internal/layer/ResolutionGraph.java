@@ -227,6 +227,12 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 	}
 
 	public Wire addWire(Node tail, P single, Node head, boolean transitive) {
+		if (tail == null) {
+			throw new NullPointerException("No tail.");
+		}
+		if (head == null) {
+			throw new NullPointerException("No head.");
+		}
 		if (tail.isPopulated()) {
 			throw new IllegalStateException("Tail node is already populated.");
 		}

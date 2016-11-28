@@ -155,6 +155,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
 	private final static String CACHE_FILE = "osgi.jpms.layer/privates.cache";
 	private final Activator activator;
+	private final BundleContext context;
 	private final FrameworkWiring fwkWiring;
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
@@ -180,8 +181,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final HashMap<Module, Controller> controllers = new HashMap<>(); 
 
 	public LayerFactoryImpl(Activator activator, BundleContext context) {
-		privatesCache = loadPrivatesCache(context);
 		this.activator = activator;
+		this.context = context;
+		privatesCache = loadPrivatesCache(context, activator);
 		Bundle systemBundle = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
 		fwkWiring = systemBundle.adapt(FrameworkWiring.class);
 		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
@@ -193,7 +195,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		wiringToModule.put(systemWiring, systemModule);
 	}
 
-	private BundleWiringPrivates loadPrivatesCache(BundleContext context) {
+	private static BundleWiringPrivates loadPrivatesCache(BundleContext context, Activator activator) {
 		File cacheFile = context.getDataFile(CACHE_FILE);
 		if (cacheFile.exists()) {
 		ObjectInputStream ois = null;
@@ -246,7 +248,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		Set<BundleWiring> wirings = new HashSet<>();
 		Collection<BundleCapability> bundles = fwkWiring.findProviders(ALL_BUNDLES_REQUIREMENT);
 		for (BundleCapability bundleCap : bundles) {
-			// only pay attention to non JPMS boot modules
+			// Only pay attention to non JPMS boot modules.
+			// NOTE this means we will not create a real JPMS Module or Layer for this bundle
 			if (bundleCap.getAttributes().get(BOOT_JPMS_MODULE) == null) {
 				BundleRevision revision = bundleCap.getRevision();
 				BundleWiring wiring = revision.getWiring();
@@ -444,12 +447,26 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		List<BundleWire> pkgWires = tail.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
 		for (BundleWire pkgWire : pkgWires) {
 			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(pkgWire.getProviderWiring());
+			// head will be null for boot modules because we do not map them into real JPMS modules
+			if (head == null) {
+				if (pkgWire.getCapability().getAttributes().get(LayerFactoryImpl.BOOT_JPMS_MODULE) != null) {
+					// wires to boot modules are ignored
+					continue;
+				}
+			}
 			BundlePackage importPackage = BundlePackage.createSimplePackage((String) pkgWire.getCapability().getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE)); 
 			graph.addWire(tail, importPackage , head, false);
 		}
 		List<BundleWire> bundleWires = tail.getValue().getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE);
 		for (BundleWire bundleWire : bundleWires) {
 			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(bundleWire.getProviderWiring());
+			if (head == null) {
+				// head will be null for boot modules because we do not map them into real JPMS modules
+				if (bundleWire.getCapability().getAttributes().get(LayerFactoryImpl.BOOT_JPMS_MODULE) != null) {
+					// wires to boot modules are ignored
+					continue;
+				}
+			}
 			graph.addWire(tail, null, head, BundleNamespace.VISIBILITY_REEXPORT.equals(bundleWire.getRequirement().getDirectives().get(BundleNamespace.REQUIREMENT_VISIBILITY_DIRECTIVE)));
 		}
 	}
@@ -597,5 +614,47 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	@Override
 	public void weave(WovenClass wovenClass) {
 		// do nothing; just need to make sure there is a hook so the WovenClassListener will get called
+	}
+
+	@Override
+	public Map<Bundle, Module> getModules() {
+		Map<Bundle, Module> modules = new HashMap<>();
+		boolean createNewWiringLayers = false;
+		layersRead.lock();
+		try {
+			for (Bundle b : context.getBundles()) {
+				BundleWiring wiring = b.adapt(BundleWiring.class);
+				Module m = wiringToModule.get(wiring);
+				if (m == null ) {
+					if ((b.getState() & (Bundle.INSTALLED | Bundle.UNINSTALLED)) == 0) {
+						createNewWiringLayers = true;
+						break;
+					}
+				} else {
+					modules.put(wiring.getBundle(), m);
+				}
+			}
+		} finally {
+			layersRead.unlock();
+		}
+
+		if (createNewWiringLayers) {
+			createNewWiringLayers();
+			modules.clear();
+			layersRead.lock();
+			try {
+				for (Bundle b : context.getBundles()) {
+					BundleWiring wiring = b.adapt(BundleWiring.class);
+					Module m = wiringToModule.get(wiring);
+					if (m != null) {
+						modules.put(wiring.getBundle(), m);
+					}
+				}
+			} finally {
+				layersRead.unlock();
+			}
+		}
+		
+		return modules;
 	}
 }

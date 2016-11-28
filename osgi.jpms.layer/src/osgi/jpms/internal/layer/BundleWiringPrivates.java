@@ -69,8 +69,10 @@ public class BundleWiringPrivates implements Serializable {
 					beginIndex = 1;
 				}
 				int endIndex = path.lastIndexOf('/');
-				path = path.substring(beginIndex, endIndex);
-				results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
+				if (endIndex >= 0) {
+					path = path.substring(beginIndex, endIndex);
+					results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
+				}
 			}
 		}
 		results.removeAll(exports);
