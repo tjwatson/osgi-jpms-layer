@@ -93,8 +93,6 @@ public class NodeFinder implements ModuleFinder {
 			}
 		}
 
-		// TODO hack to enable addReads
-		builder.contains("osgi.jpms.internal.layer.addreads");
 		ModuleDescriptor desc = builder.build();
 		return new ModuleReference(desc, null, () -> {return getReader(node.getValue());});
 	}

@@ -28,6 +28,7 @@ import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ResolutionException;
 import java.lang.reflect.Layer;
+import java.lang.reflect.Layer.Controller;
 import java.lang.reflect.LayerInstantiationException;
 import java.lang.reflect.Module;
 import java.nio.file.Path;
@@ -76,24 +77,6 @@ import org.osgi.resource.Resource;
 import osgi.jpms.layer.LayerFactory;
 
 public class LayerFactoryImpl implements LayerFactory, WovenClassListener, WeavingHook, SynchronousBundleListener, FrameworkListener {
-
-	static void addReadsNest(Map<BundleWiring, Module> wiringToModule) {
-		long addReadsNestStart = System.nanoTime();
-		Set<Module> bootModules = Layer.boot().modules();
-		Collection<Module> allBundleModules = wiringToModule.values();
-		// Not checking for existing edges for simplicity.
-		for (Module module : allBundleModules) {
-			if (!systemModule.equals(module)) {
-				// First add reads to all boot modules.
-				AddReadsUtil.addReads(module, bootModules);
-				// Now ensure bidirectional read of all bundle modules.
-				AddReadsUtil.addReads(module, allBundleModules);
-				// Add read to the system.bundle module.
-				AddReadsUtil.addReads(module, Collections.singleton(systemModule));
-			}
-		}
-		System.out.println("Time to addReadsNest: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - addReadsNestStart), TimeUnit.NANOSECONDS));
-	}
 
 	class NamedLayerImpl implements NamedLayer {
 		final Layer layer;
@@ -168,6 +151,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}	
 	};
 
+	public static final String BOOT_JPMS_MODULE = "equinox.boot.jpms.module";
 	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
 	private final static String CACHE_FILE = "osgi.jpms.layer/privates.cache";
 	private final Activator activator;
@@ -177,7 +161,6 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final AtomicLong nextLayerId = new AtomicLong(0);
 	private final ResolutionGraph<BundleWiring, BundlePackage> graph = new ResolutionGraph<>();
 	private final BundleWiringPrivates privatesCache;
-
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
 	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
 		String n1 = w1.getRevision().getSymbolicName();
@@ -194,7 +177,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}
 		return w1.getBundle().compareTo(w2.getBundle());
 	});
-
+	private final HashMap<Module, Controller> controllers = new HashMap<>(); 
 
 	public LayerFactoryImpl(Activator activator, BundleContext context) {
 		privatesCache = loadPrivatesCache(context);
@@ -263,10 +246,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		Set<BundleWiring> wirings = new HashSet<>();
 		Collection<BundleCapability> bundles = fwkWiring.findProviders(ALL_BUNDLES_REQUIREMENT);
 		for (BundleCapability bundleCap : bundles) {
-			BundleRevision revision = bundleCap.getRevision();
-			BundleWiring wiring = revision.getWiring();
-			if (wiring != null && wiring.isInUse()) {
-				wirings.add(wiring);
+			// only pay attention to non JPMS boot modules
+			if (bundleCap.getAttributes().get(BOOT_JPMS_MODULE) == null) {
+				BundleRevision revision = bundleCap.getRevision();
+				BundleWiring wiring = revision.getWiring();
+				if (wiring != null && wiring.isInUse()) {
+					wirings.add(wiring);
+				}
 			}
 		}
 		return wirings;
@@ -289,7 +275,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 							moduleToNamedLayers.forEach((k, v) -> v.remove(namedLayer));
 						}
 					}
-					AddReadsUtil.clearAddReadsCunsumer(wiringModule.getValue());
+					clearController(wiringModule.getValue());
 					// remove the wiring no long in use
 					wirings.remove();
 				}
@@ -359,17 +345,22 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				layers = Collections.singletonList(Layer.empty());
 			}
 			
-			// Map the module names to the wiring class loaders
+
 			final String finderName = finder.name;
+			Controller controller = null;
 			try {
-				Layer layer = Layer.defineModules(
-					config,
-					layers,
-					(name) -> {
-						return Optional.ofNullable(
-								finderName.equals(name) ? n.getValue() : null).map(
-										(w) -> {return w.getClassLoader();}).get();
-					});
+				controller = Layer.defineModules(
+						config,
+						layers,
+						// Map the module names to the wiring class loaders
+						// NOTE we should only have one module in this layer
+						(name) -> {
+							return Optional.ofNullable(
+									finderName.equals(name) ? n.getValue() : null).map(
+											(w) -> {return w.getClassLoader();}).get();
+						}
+				);
+				Layer layer = controller.layer();
 				m = layer.modules().iterator().next();
 			} catch (LayerInstantiationException e) {
 				// The most likely cause is because we have loaded classes from the 
@@ -380,10 +371,45 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				m = n.getValue().getClassLoader().getUnnamedModule();
 				activator.logError("Falling back to unnamed module for: " + n.getValue().getRevision().getSymbolicName(), e);
 			}
-			AddReadsUtil.defineAddReadsConsumer(m);
+			saveController(m, controller);
 			wiringToModule.put(n.getValue(), m);
 		}
 		return m;
+	}
+
+	private void saveController(Module module, Controller controller) {
+		controllers.put(module, controller);
+	}
+
+	private void clearController(Module module) {
+		controllers.remove(module);
+	}
+
+	private void addReads(Module wantsRead, Collection<Module> toTargets) {
+		Controller controller = controllers.get(wantsRead);
+		if (controller != null) {
+			for (Module toTarget : toTargets) {
+				controller.addReads(wantsRead, toTarget);
+			}
+		}
+	}
+
+	private void addReadsNest(Map<BundleWiring, Module> wiringToModule) {
+		long addReadsNestStart = System.nanoTime();
+		Set<Module> bootModules = Layer.boot().modules();
+		Collection<Module> allBundleModules = wiringToModule.values();
+		// Not checking for existing edges for simplicity.
+		for (Module module : allBundleModules) {
+			if (!systemModule.equals(module)) {
+				// First add reads to all boot modules.
+				addReads(module, bootModules);
+				// Now ensure bidirectional read of all bundle modules.
+				addReads(module, allBundleModules);
+				// Add read to the system.bundle module.
+				addReads(module, Collections.singleton(systemModule));
+			}
+		}
+		System.out.println("Time to addReadsNest: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - addReadsNestStart), TimeUnit.NANOSECONDS));
 	}
 
 	static boolean canBuildModuleHierarchy(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
@@ -495,13 +521,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			Layer layer;
 			switch (type) {
 				case OneLoader:
-					layer = Layer.defineModulesWithOneLoader(config, layers, parent);
+					layer = Layer.defineModulesWithOneLoader(config, layers, parent).layer();
 					break;
 				case ManyLoaders :
-					layer = Layer.defineModulesWithManyLoaders(config, layers, parent);
+					layer = Layer.defineModulesWithManyLoaders(config, layers, parent).layer();
 					break;
 				case MappedLoaders :
-					layer = Layer.defineModules(config, layers, mappedLoaders);
+					layer = Layer.defineModules(config, layers, mappedLoaders).layer();
 					break;
 				default:
 					throw new IllegalArgumentException(type.toString());
