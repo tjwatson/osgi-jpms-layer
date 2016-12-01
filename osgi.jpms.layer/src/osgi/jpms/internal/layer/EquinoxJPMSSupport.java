@@ -26,6 +26,7 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleDescriptor.Exports;
+import java.lang.module.ModuleDescriptor.Provides;
 import java.lang.module.ModuleDescriptor.Requires;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
@@ -41,6 +42,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
+
+import javax.lang.model.element.ModuleElement.UsesDirective;
 
 import org.eclipse.osgi.container.Module;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ModuleEvent;
@@ -146,6 +149,15 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 						Map.of(PackageNamespace.PACKAGE_NAMESPACE, exports.source()));
 			}
 
+			for(Provides provides : desc.provides()) {
+				builder.addCapability(
+						JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE,
+						Map.of(),
+						Map.of(
+								JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE, provides.service(),
+								JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH, provides.providers().get(0)));
+			}
+
 			for (Requires requires : desc.requires()) {
 				Map<String, String> directives = new HashMap<>();
 
@@ -159,6 +171,12 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 				directives.put(Namespace.REQUIREMENT_FILTER_DIRECTIVE, "(" + BundleNamespace.BUNDLE_NAMESPACE + "=" + requires.name() + ")");
 
 				builder.addRequirement(BundleNamespace.BUNDLE_NAMESPACE, directives, Collections.emptyMap());
+			}
+
+			for(String uses : desc.uses()) {
+				builder.addRequirement(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE,
+						Map.of(Namespace.REQUIREMENT_RESOLUTION_DIRECTIVE, Namespace.RESOLUTION_OPTIONAL),
+						Map.of(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE, uses));
 			}
 			return builder;
 		}

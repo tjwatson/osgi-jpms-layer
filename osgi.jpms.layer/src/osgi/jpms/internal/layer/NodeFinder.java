@@ -25,11 +25,13 @@ import java.lang.module.ModuleDescriptor.Requires.Modifier;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
+import java.lang.reflect.Layer;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -43,6 +45,37 @@ import org.osgi.framework.wiring.BundleWiring;
  *
  */
 public class NodeFinder implements ModuleFinder {
+	final static Set<String> bootServices;
+	final static Set<String> bootModules;
+	static {
+		Set<String> services = new HashSet<>();
+		Set<String> modules = new HashSet<>();
+		Set<String> packages = new HashSet<>();
+		Layer.boot().modules().forEach((m) -> {
+			modules.add(m.getName());
+			m.getDescriptor().exports().forEach((e) -> {
+				if (!e.isQualified()) {
+					packages.add(e.source());
+				}
+			});
+		});
+
+		Layer.boot().modules().forEach((m) -> {
+			m.getDescriptor().provides().forEach((s) -> {
+				String service = s.service();
+				int lastDot = service.lastIndexOf('.');
+				if (lastDot >= 0) {
+					String servicePkg = service.substring(0, lastDot);
+					if (packages.contains(servicePkg)) {
+						services.add(service);
+					}
+				}
+			});
+		});
+		bootServices = Collections.unmodifiableSet(services);
+		bootModules = Collections.unmodifiableSet(modules);
+	}
+
 	final String name;
 	final ModuleReference moduleRef;
 
@@ -51,13 +84,13 @@ public class NodeFinder implements ModuleFinder {
 	 * @param wirings a mapping of module names to bundle wirings.  The bundle
 	 * wiring will be used to back a module with a name of the key value.
 	 */
-	public NodeFinder(Activator activator, ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
+	public NodeFinder(Activator activator, ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
 		String bsn = node.getValue().getRevision().getSymbolicName();
 		name = bsn == null ? "" : bsn;
-		moduleRef = createModuleReference(activator, name, node, includeRequires);
+		moduleRef = createModuleReference(activator, name, node, includeRequires, requireBootModules);
 	}
 
-	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires) {
+	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
 		// name -> bundle bsn
 		Builder builder = ModuleDescriptor.openModule(name);
 		// version -> bundle version
@@ -76,6 +109,23 @@ public class NodeFinder implements ModuleFinder {
 		// privates -> all packages contained in bundle class path
 		node.getPrivates().forEach((p) -> p.addPrivate(builder));
 
+		if (requireBootModules) {
+			bootModules.forEach((m) -> {
+				try {
+					builder.requires(m);
+				} catch (IllegalStateException e) {
+					// ignore
+				}
+			});
+			bootServices.forEach((s) -> {
+				try {
+					builder.uses(s);
+				} catch (IllegalStateException e) {
+					// ignore
+				}
+			});
+		}
+
 		if (includeRequires) {
 			for (ResolutionGraph<BundleWiring, BundlePackage>.Node dependency : node.dependsOn()) {
 				BundleRevision r = dependency.getValue().getRevision();
@@ -92,6 +142,17 @@ public class NodeFinder implements ModuleFinder {
 				}
 			}
 		}
+
+		node.getValue().getCapabilities(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
+				(p) -> builder.provides(
+						(String) p.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE),
+						(String) p.getAttributes().get(JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH))
+				);
+
+		node.getValue().getRequirements(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
+				(u) -> builder.uses(
+						(String) u.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE))
+				);
 
 		ModuleDescriptor desc = builder.build();
 		return new ModuleReference(desc, null, () -> {return getReader(node.getValue());});

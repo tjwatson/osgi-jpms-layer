@@ -7,3 +7,4 @@ Bundle-RequiredExecutionEnvironment: JavaSE-9
 Fragment-Host: system.bundle
 ExtensionBundle-Activator: osgi.jpms.internal.layer.Activator
 Export-Package: osgi.jpms.layer
+Provide-Capability: equinox.jpms.service

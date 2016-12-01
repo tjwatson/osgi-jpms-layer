@@ -306,48 +306,46 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private Module createModule(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
-			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n));
-
+			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n), true);
 			Configuration config;
 			List<Layer> layers;
-			if (canBuildModuleHierarchy(n)) {
-				Set<Module> dependsOn = new HashSet<>();
-				for (ResolutionGraph<BundleWiring, BundlePackage>.Node d : n.dependsOn()) {
-					dependsOn.add(createModule(d));
-				}
-				List<Configuration> configs = new ArrayList<>(dependsOn.size());
-				layers = new ArrayList<>(dependsOn.size());
-				for (Module d : dependsOn) {
-					Layer l = d.getLayer();
-					if (l != null) {
-						// unnamed modules have no layers.
-						// note that a null layer should result in a resolution error below
-						layers.add(l);
-						configs.add(l.configuration());
+			try {
+				if (canBuildModuleHierarchy(n)) {
+					Set<Module> dependsOn = new HashSet<>();
+					for (ResolutionGraph<BundleWiring, BundlePackage>.Node d : n.dependsOn()) {
+						dependsOn.add(createModule(d));
 					}
-				}
-				if (configs.isEmpty()) {
-					configs.add(Layer.empty().configuration());
-					layers.add(Layer.empty());
-				}
-				try {
+					List<Configuration> configs = new ArrayList<>(dependsOn.size());
+					layers = new ArrayList<>(dependsOn.size());
+					for (Module d : dependsOn) {
+						Layer l = d.getLayer();
+						if (l != null) {
+							// unnamed modules have no layers.
+							// note that a null layer should result in a resolution error below
+							layers.add(l);
+							configs.add(l.configuration());
+						}
+					}
+
+					configs.add(Layer.boot().configuration());
+					layers.add(Layer.boot());
+
 					config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
-				} catch (ResolutionException e) {
-					activator.logError("Resolution error creating layer hierarchy for: " + finder.name, e);
-					// well something blew up; try without module Hierarchy
-					finder = new NodeFinder(activator, n, false);
-					config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-					layers = Collections.singletonList(Layer.empty());
+				} else {
+					String cause = n.hasSplitSources() ? " split packages" : "";
+					cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
+					activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
+					// try without module Hierarchy
+					config = Layer.boot().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+					layers = Collections.singletonList(Layer.boot());
 				}
-			} else {
-				String cause = n.hasSplitSources() ? " split packages" : "";
-				cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
-				activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
-				// try without module Hierarchy
-				config = Layer.empty().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-				layers = Collections.singletonList(Layer.empty());
+			} catch (ResolutionException e) {
+				activator.logError("Resolution error creating layer for: " + finder.name, e);
+				// well something blew up; try without module hierarchy and boot modules
+				finder = new NodeFinder(activator, n, false, false);
+				config = Layer.boot().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+				layers = Collections.singletonList(Layer.boot());
 			}
-			
 
 			final String finderName = finder.name;
 			Controller controller = null;
@@ -505,22 +503,18 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private NamedLayer createLayer(LoaderType type, String name, Set<Path> paths, Set<String> roots, ClassLoader parent, Function<String, ClassLoader> mappedLoaders) {
 		ModuleFinder finder = ModuleFinder.of(paths.toArray(new Path[0]));
 		Set<String> required = new HashSet<>();
-		for (String root : roots) {
-			finder.find(root).ifPresent((ref) -> {
-				ref.descriptor().requires().forEach((req) -> required.add(req.name()));
-			});
-		}
+		finder.findAll().forEach(
+				(m) -> m.descriptor().requires().forEach(
+						(r) -> required.add(r.name())));
 		layersWrite.lock();
 		try {
 			createNewWiringLayers();
 			// TODO not an optimized lookup here for the requires
 			List<Module> dependsOn = new ArrayList<>();
-			for (String r : required) {
-				for (Module m : wiringToModule.values()) {
-					if (r.equals(m.getName())) {
-						dependsOn.add(m);
-						break;
-					}
+			for (Module m : wiringToModule.values()) {
+				if (required.contains(m.getName())) {
+					dependsOn.add(m);
+					break;
 				}
 			}
 			List<Configuration> configs = new ArrayList<>(dependsOn.size() + 1);
@@ -534,7 +528,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			layers.add(systemModule.getLayer());
 			configs.add(systemModule.getLayer().configuration());
 
-			Configuration config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), roots);
+			Configuration config = Configuration.resolveRequiresAndUses(finder, configs, ModuleFinder.of(), roots);
 			Layer layer;
 			switch (type) {
 				case OneLoader:

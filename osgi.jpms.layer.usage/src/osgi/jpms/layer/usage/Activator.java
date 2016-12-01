@@ -6,9 +6,12 @@ import java.lang.reflect.Module;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
+import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.Function;
 
 import org.osgi.framework.Bundle;
 import org.osgi.framework.BundleActivator;
@@ -47,7 +50,7 @@ public class Activator implements BundleActivator {
 			aTest.start();
 			Module aModule = factory.getModules().get(aTest);
 			System.out.println("JPMS Test module as a bundle.");
-			tryLoadClasses(aModule.getLayer());
+			tryUseFunctions(aModule.getLayer());
 			aTest.uninstall();
 		} catch (Throwable t) {
 			t.printStackTrace();
@@ -69,19 +72,38 @@ public class Activator implements BundleActivator {
 		System.out.println("Using modules at: " + modPaths);
 
 		NamedLayer layer1 = layerFactory.createLayerWithManyLoaders("JPMS Test Layer MANY loaders", modPaths , jpmsNames, null);
-		tryLoadClasses(layer1);
+		tryUseFunctions(layer1);
 		layer1.consumeEvents((e) -> System.out.println(e + ": " + layer1.getName() + ": " + layer1.getId()));
 		layer1.consumeEvents((e) -> System.out.println(e + ": second consumer"));
 
 		NamedLayer layer2 = layerFactory.createLayerWithOneLoader("JPMS Test Layer ONE loader", modPaths , jpmsNames, null);
-		tryLoadClasses(layer2);
+		tryUseFunctions(layer2);
 		layer2.consumeEvents((e) -> System.out.println(e + ": " + layer2.getName() + ": " + layer2.getId()));
 		layer2.consumeEvents((e) -> System.out.println(e + ": second consumer"));
 	}
 
-	private void tryLoadClasses(NamedLayer namedLayer) {
+	private void tryUseFunctions(NamedLayer namedLayer) {
 		System.out.println(namedLayer.getName());
-		tryLoadClasses(namedLayer.getLayer());
+		tryUseFunctions(namedLayer.getLayer());
+	}
+
+	@SuppressWarnings("unchecked")
+	private void tryUseFunctions(Layer layer) {
+		@SuppressWarnings("rawtypes")
+		ServiceLoader<Function> functions = ServiceLoader.load(layer, Function.class);
+		for (Function<String, Callable<String>> function : functions) {
+			Module m = function.getClass().getModule();
+			if (layer.equals(m.getLayer())) {
+				String p = m.getName();
+				for (String className: List.of(p + ".C", p + ".A", p + ".B", p + ".UseACallableFactory")) {
+					try {
+						System.out.println("    SUCCESS: " + function.apply(className).call());
+					} catch (Throwable t) {
+						System.err.println("    FAILED: " + t.getMessage());
+					}
+				}
+			}
+		}
 	}
 
 	private void tryLoadClasses(Layer layer) {

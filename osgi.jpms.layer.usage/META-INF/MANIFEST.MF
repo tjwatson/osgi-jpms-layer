@@ -8,3 +8,4 @@ Bundle-RequiredExecutionEnvironment: JavaSE-9
 Import-Package: org.osgi.framework;version="1.8.0",
  org.osgi.framework.wiring;version="1.2.0",
  osgi.jpms.layer
+Require-Capability: equinox.jpms.service; equinox.jpms.service=java.util.function.Function; resolution:=optional
