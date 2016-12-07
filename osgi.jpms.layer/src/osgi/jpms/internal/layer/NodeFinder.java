@@ -45,10 +45,16 @@ import org.osgi.framework.wiring.BundleWiring;
  *
  */
 public class NodeFinder implements ModuleFinder {
-	final static Set<String> bootServices;
-	final static Set<String> bootModules;
+	/**
+	 * Set of public boot services we must specified as used by every osgi bundle module
+	 */
+	private final static Set<String> bootServices;
+	/**
+	 * Set of all boot module names
+	 */
+	private final static Set<String> bootModules;
 	static {
-		Set<String> services = new HashSet<>();
+		// first, gather all unqualified packages and module names
 		Set<String> modules = new HashSet<>();
 		Set<String> packages = new HashSet<>();
 		Layer.boot().modules().forEach((m) -> {
@@ -60,6 +66,8 @@ public class NodeFinder implements ModuleFinder {
 			});
 		});
 
+		// second, gather all service names from unqualified packages
+		Set<String> services = new HashSet<>();
 		Layer.boot().modules().forEach((m) -> {
 			m.getDescriptor().provides().forEach((s) -> {
 				String service = s.service();
