@@ -163,7 +163,13 @@ public class NodeFinder implements ModuleFinder {
 				);
 
 		ModuleDescriptor desc = builder.build();
-		return new ModuleReference(desc, null, () -> {return getReader(node.getValue());});
+		return new ModuleReference(desc, null){
+			@Override
+			public ModuleReader open() throws IOException {
+				return getReader(node.getValue());
+			}
+			
+		};
 	}
 
 	private static ModuleReader getReader(BundleWiring wiring) {
