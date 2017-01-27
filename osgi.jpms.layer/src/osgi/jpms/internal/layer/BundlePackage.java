@@ -82,7 +82,7 @@ public class BundlePackage implements Serializable {
 	}
 
 	void addPrivate(Builder builder) {
-		builder.contains(name);
+		builder.packages(Collections.singleton(name));
 	}
 
 	public String toString() {

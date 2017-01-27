@@ -330,20 +330,20 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 					configs.add(Layer.boot().configuration());
 					layers.add(Layer.boot());
 
-					config = Configuration.resolveRequires(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
+					config = Configuration.resolve(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
 				} else {
 					String cause = n.hasSplitSources() ? " split packages" : "";
 					cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
 					activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
 					// try without module Hierarchy
-					config = Layer.boot().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+					config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
 					layers = Collections.singletonList(Layer.boot());
 				}
 			} catch (ResolutionException e) {
 				activator.logError("Resolution error creating layer for: " + finder.name, e);
 				// well something blew up; try without module hierarchy and boot modules
 				finder = new NodeFinder(activator, n, false, false);
-				config = Layer.boot().configuration().resolveRequires(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+				config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
 				layers = Collections.singletonList(Layer.boot());
 			}
 
@@ -528,7 +528,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			layers.add(systemModule.getLayer());
 			configs.add(systemModule.getLayer().configuration());
 
-			Configuration config = Configuration.resolveRequiresAndUses(finder, configs, ModuleFinder.of(), roots);
+			Configuration config = Configuration.resolveAndBind(finder, configs, ModuleFinder.of(), roots);
 			Layer layer;
 			switch (type) {
 				case OneLoader:

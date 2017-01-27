@@ -155,7 +155,7 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 						Map.of(),
 						Map.of(
 								JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE, provides.service(),
-								JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH, provides.providers().get(0)));
+								JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH, provides.providers()));
 			}
 
 			for (Requires requires : desc.requires()) {

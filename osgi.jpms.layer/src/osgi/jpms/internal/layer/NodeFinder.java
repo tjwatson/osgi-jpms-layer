@@ -32,6 +32,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
@@ -100,7 +101,7 @@ public class NodeFinder implements ModuleFinder {
 
 	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
 		// name -> bundle bsn
-		Builder builder = ModuleDescriptor.openModule(name);
+		Builder builder = ModuleDescriptor.newOpenModule(name);
 		// version -> bundle version
 		builder.version(node.getValue().getBundle().getVersion().toString());
 
@@ -152,15 +153,20 @@ public class NodeFinder implements ModuleFinder {
 		}
 
 		node.getValue().getCapabilities(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
-				(p) -> builder.provides(
-						(String) p.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE),
-						(String) p.getAttributes().get(JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH))
-				);
+				(p) -> {
+					String service = (String) p.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE);
+					@SuppressWarnings("unchecked")
+					List<String> providesWith = (List<String>) p.getAttributes().get(JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH);
+					builder.provides(
+							service,
+							providesWith);
+				}
+		);
 
 		node.getValue().getRequirements(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
 				(u) -> builder.uses(
 						(String) u.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE))
-				);
+		);
 
 		ModuleDescriptor desc = builder.build();
 		return new ModuleReference(desc, null){
