@@ -28,6 +28,8 @@ import java.lang.module.ModuleReference;
 import java.lang.reflect.Layer;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.text.CharacterIterator;
+import java.text.StringCharacterIterator;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -95,7 +97,7 @@ public class NodeFinder implements ModuleFinder {
 	 */
 	public NodeFinder(Activator activator, ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
 		String bsn = node.getValue().getRevision().getSymbolicName();
-		name = bsn == null ? "" : bsn;
+		name = bsn == null ? "" : mungeModuleName(bsn);
 		moduleRef = createModuleReference(activator, name, node, includeRequires, requireBootModules);
 	}
 
@@ -144,6 +146,7 @@ public class NodeFinder implements ModuleFinder {
 				} else {
 					bsn = r.getSymbolicName();
 				}
+				bsn = mungeModuleName(bsn);
 				if (node.isTransitive(dependency)) {
 					builder.requires(EnumSet.of(Modifier.TRANSITIVE), bsn);
 				} else {
@@ -226,4 +229,29 @@ public class NodeFinder implements ModuleFinder {
 		return Collections.singleton(moduleRef);
 	}
 
+	static String mungeModuleName(String bsn) {
+        if (bsn.length() == 0) {
+            return "_";
+        }
+        CharacterIterator ci = new StringCharacterIterator(bsn);
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+        for (char c = ci.first(); c != CharacterIterator.DONE; c = ci.next()) {
+            if (first) {
+            	first = false;
+                if (Character.isJavaIdentifierStart(c)) {
+                    sb.append(c);
+                } else
+                    sb.append('_');
+            } else {
+            	first = c == '.';
+	            if (first || Character.isJavaIdentifierPart(c)) {
+	                sb.append(c);
+	            } else {
+	                sb.append('_');
+	            }
+            }
+        };
+        return sb.toString();
+	}
 }
