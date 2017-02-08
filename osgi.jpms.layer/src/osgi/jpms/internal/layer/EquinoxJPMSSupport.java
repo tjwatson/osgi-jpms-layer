@@ -37,13 +37,12 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
-
-import javax.lang.model.element.ModuleElement.UsesDirective;
 
 import org.eclipse.osgi.container.Module;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ModuleEvent;
@@ -211,7 +210,9 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 		// keep track of the boot modules that should be installed
 		Set<String> bootModuleLocations = new HashSet<>();
 		// make sure all boot modules are installed
-		for (java.lang.reflect.Module module : Layer.boot().modules()) {
+		Set<java.lang.reflect.Module> bootModules = new TreeSet<java.lang.reflect.Module>((m1, m2) ->{return m1.getName().compareTo(m2.getName());});
+		bootModules.addAll(Layer.boot().modules());
+		for (java.lang.reflect.Module module : bootModules) {
 			bootModuleLocations.add(installBootModule(module, context));
 		}
 		Set<Bundle> refresh = new HashSet<>();

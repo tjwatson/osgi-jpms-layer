@@ -639,9 +639,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			try {
 				for (Bundle b : context.getBundles()) {
 					BundleWiring wiring = b.adapt(BundleWiring.class);
-					Module m = wiringToModule.get(wiring);
-					if (m != null) {
-						modules.put(wiring.getBundle(), m);
+					if (wiring != null) {
+						Module m = wiringToModule.get(wiring);
+						if (m != null) {
+							modules.put(wiring.getBundle(), m);
+						}
 					}
 				}
 			} finally {
