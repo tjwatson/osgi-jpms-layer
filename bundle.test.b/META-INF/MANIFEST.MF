@@ -4,8 +4,7 @@ Bundle-Name: A
 Bundle-SymbolicName: bundle.test.b
 Bundle-Version: 1.0.0.qualifier
 Bundle-RequiredExecutionEnvironment: JavaSE-9
-Import-Package: org.osgi.framework
-Export-Package: bundle.test.b; uses:="b"
+Export-Package: bundle.test.b; uses:="bundle.test.a"
 Require-Bundle: bundle.test.a; visibility:=reexport
-Bundle-Activator: bundle.test.b.internal.Activator
 Private-Package: bundle.test.b.internal
+Service-Component: component.xml

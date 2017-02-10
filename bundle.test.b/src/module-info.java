@@ -16,8 +16,9 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package bundle.test.a;
+module bundle.test.b {
 
-public class A {
-
+	requires java.base;
+	requires transitive bundle.test.a;
+	exports bundle.test.b;
 }
