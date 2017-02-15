@@ -60,7 +60,7 @@ public class Activator implements BundleActivator {
 		new Thread(() -> {
 			try {
 				Thread.sleep(1000);
-				context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).stop();
+				//context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION).stop();
 			} catch (Exception e) {
 			}
 		}).start();
@@ -84,6 +84,7 @@ public class Activator implements BundleActivator {
 
 	private void tryUseFunctions(NamedLayer namedLayer) {
 		System.out.println(namedLayer.getName());
+		System.out.println(namedLayer.getLayer().modules());
 		tryUseFunctions(namedLayer.getLayer());
 	}
 

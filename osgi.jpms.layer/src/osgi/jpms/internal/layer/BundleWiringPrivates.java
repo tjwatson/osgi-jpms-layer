@@ -48,31 +48,22 @@ public class BundleWiringPrivates implements Serializable {
 		// Can the Layer API be enhanced to map a classloader to a default module to use? 
 
 		Set<BundlePackage> results = new HashSet<>();
+
 		// Look for private packages.  Each private package needs to be known
 		// to the JPMS otherwise the classes in them will be associated with the
 		// unknown module.
-		// Look now the Private-Package header bnd produces
-		String privatePackages = wiring.getBundle().getHeaders("").get("Private-Package");
-		if (privatePackages != null) {
-			// very simplistic parsing here
-			String[] privates = privatePackages.split(",");
-			for (String packageName : privates) {
-				results.add(BundlePackage.createSimplePackage(packageName));
+		// Discover packages the hard way
+		// TODO could look the Private-Package header bnd produces
+		Collection<String> classes = wiring.listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
+		for (String path : classes) {
+			int beginIndex = 0;
+			if (path.startsWith("/")) {
+				beginIndex = 1;
 			}
-		} else {
-			// TODO consider caching this since it can be costly to do search
-			// need to discover packages the hard way
-			Collection<String> classes = wiring.listResources("/", "*.class", BundleWiring.LISTRESOURCES_LOCAL | BundleWiring.LISTRESOURCES_RECURSE);
-			for (String path : classes) {
-				int beginIndex = 0;
-				if (path.startsWith("/")) {
-					beginIndex = 1;
-				}
-				int endIndex = path.lastIndexOf('/');
-				if (endIndex >= 0) {
-					path = path.substring(beginIndex, endIndex);
-					results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
-				}
+			int endIndex = path.lastIndexOf('/');
+			if (endIndex >= 0) {
+				path = path.substring(beginIndex, endIndex);
+				results.add(BundlePackage.createSimplePackage(path.replace('/', '.')));
 			}
 		}
 		results.removeAll(exports);

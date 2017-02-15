@@ -514,7 +514,6 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			for (Module m : wiringToModule.values()) {
 				if (required.contains(m.getName())) {
 					dependsOn.add(m);
-					break;
 				}
 			}
 			List<Configuration> configs = new ArrayList<>(dependsOn.size() + 1);
@@ -528,7 +527,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			layers.add(systemModule.getLayer());
 			configs.add(systemModule.getLayer().configuration());
 
-			Configuration config = Configuration.resolveAndBind(finder, configs, ModuleFinder.of(), roots);
+			Configuration config = Configuration.resolveAndBind(ModuleFinder.of(), configs, finder, roots);
 			Layer layer;
 			switch (type) {
 				case OneLoader:
