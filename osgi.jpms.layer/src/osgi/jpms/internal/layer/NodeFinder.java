@@ -95,13 +95,13 @@ public class NodeFinder implements ModuleFinder {
 	 * @param wirings a mapping of module names to bundle wirings.  The bundle
 	 * wiring will be used to back a module with a name of the key value.
 	 */
-	public NodeFinder(Activator activator, ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
+	public NodeFinder(Activator activator, ResolutionGraph.Node node, boolean includeRequires, boolean requireBootModules) {
 		String bsn = node.getValue().getRevision().getSymbolicName();
 		name = bsn == null ? "" : mungeModuleName(bsn);
 		moduleRef = createModuleReference(activator, name, node, includeRequires, requireBootModules);
 	}
 
-	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph<BundleWiring, BundlePackage>.Node node, boolean includeRequires, boolean requireBootModules) {
+	private static ModuleReference createModuleReference(Activator activator, String name, final ResolutionGraph.Node node, boolean includeRequires, boolean requireBootModules) {
 		// name -> bundle bsn
 		Builder builder = ModuleDescriptor.newOpenModule(name);
 		// version -> bundle version
@@ -138,7 +138,7 @@ public class NodeFinder implements ModuleFinder {
 		}
 
 		if (includeRequires) {
-			for (ResolutionGraph<BundleWiring, BundlePackage>.Node dependency : node.dependsOn()) {
+			for (ResolutionGraph.Node dependency : node.dependsOn()) {
 				BundleRevision r = dependency.getValue().getRevision();
 				String bsn;
 				if (r.getBundle().getBundleId() == 0) {

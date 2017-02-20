@@ -25,13 +25,15 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
-public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Node>{
+import org.osgi.framework.wiring.BundleWiring;
+
+public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 	public class Node {
-		private final V v;
-		private final Set<P> provides;
-		private final Set<P> substitutes;
-		private final Set<P> privates;
-		private final Map<P, Set<Node>> sources;
+		private final BundleWiring v;
+		private final Set<BundlePackage> provides;
+		private final Set<BundlePackage> substitutes;
+		private final Set<BundlePackage> privates;
+		private final Map<BundlePackage, Set<Node>> sources;
 		private final Set<Node> dependsOn;
 		private final Set<Node> transitives;
 		private final Set<Wire> requiredWires;
@@ -40,8 +42,8 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 		private boolean hasSplitSources = false;
 		private boolean hasCycleSources = false;
 
-		Node(V v, Set<P> provides, Set<P> substitutes, Set<P> privates) {
-			this.v = v;
+		Node(BundleWiring wiring, Set<BundlePackage> provides, Set<BundlePackage> substitutes, Set<BundlePackage> privates) {
+			this.v = wiring;
 			this.provides = Collections.unmodifiableSet(provides);
 			this.substitutes = Collections.unmodifiableSet(substitutes);
 			this.privates = new HashSet<>(privates);
@@ -50,15 +52,15 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			this.dependsOn = new HashSet<>();
 			this.transitives = new HashSet<>();
 		}
-		public V getValue() {
+		public BundleWiring getValue() {
 			return v;
 		}
 
-		public Set<P> getPrivates() {
+		public Set<BundlePackage> getPrivates() {
 			return privates;
 		}
 
-		public Set<P> getProvides() {
+		public Set<BundlePackage> getProvides() {
 			return provides;
 		}
 
@@ -78,7 +80,6 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			return transitives.contains(node);
 		}
 
-		@SuppressWarnings("rawtypes")
 		@Override
 		public boolean equals(Object o) {
 			if (!(o instanceof ResolutionGraph.Node)) {
@@ -102,11 +103,11 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			sourcesPopulated = true;
 
 			// populate export sources upfront with this node
-			for (P p : provides) {
+			for (BundlePackage p : provides) {
 				addToSources(p, this);
 			}
 
-			Set<P> singles = new HashSet<>();
+			Set<BundlePackage> singles = new HashSet<>();
 			for (Wire w : requiredWires) {
 				if (w.getSingle() != null) {
 					singles.add(w.getSingle());
@@ -116,7 +117,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 
 			// populate privates after removing ones that got overridden by singles
 			privates.removeAll(singles);
-			for (P p : privates) {
+			for (BundlePackage p : privates) {
 				addToSources(p, this);
 			}
 
@@ -142,7 +143,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			});
 		}
 
-		private void addToSources(P p, Node node) {
+		private void addToSources(BundlePackage p, Node node) {
 			Set<Node> sourceNodes = sources.computeIfAbsent(p, (k) -> new HashSet<>());
 			sourceNodes.add(node);
 			if (sourceNodes.size() > 1) {
@@ -157,7 +158,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			return sourcesPopulated;
 		}
 
-		private void addSingleSource(Node tail, P p, Set<Node> visited) {
+		private void addSingleSource(Node tail, BundlePackage p, Set<Node> visited) {
 			if (!visited.add(this)) {
 				return;
 			}
@@ -172,8 +173,8 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			}
 		}
 
-		private void addMultiSource(Node tail, Set<P> singles) {
-			for (P p : provides) {
+		private void addMultiSource(Node tail, Set<BundlePackage> singles) {
+			for (BundlePackage p : provides) {
 				if (!singles.contains(p)) {
 					addSingleSource(tail, p, new HashSet<>());
 				}
@@ -192,11 +193,11 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 
 	public class Wire {
 		private final Node tail;
-		private final P single;
+		private final BundlePackage single;
 		private final Node head;
 		private final boolean transitive;
 
-		Wire (Node tail, P single, Node head, boolean transitive) {
+		Wire (Node tail, BundlePackage single, Node head, boolean transitive) {
 			this.tail = tail;
 			this.single = single;
 			this.head = head;
@@ -211,7 +212,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 			return head;
 		}
 
-		public P getSingle() {
+		public BundlePackage getSingle() {
 			return single;
 		}
 
@@ -220,13 +221,13 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 		}
 	}
 
-	private final Map<V, Node> nodes = new HashMap<>();
+	private final Map<BundleWiring, Node> nodes = new HashMap<>();
 
-	public Node addNode(V v, Set<P> provides, Set<P> substitutes, Set<P> privates) {
-		return nodes.computeIfAbsent(v, (nv) -> new Node(nv, provides, substitutes, privates));
+	public Node addNode(BundleWiring wiring, Set<BundlePackage> provides, Set<BundlePackage> substitutes, Set<BundlePackage> privates) {
+		return nodes.computeIfAbsent(wiring, (w) -> new Node(w, provides, substitutes, privates));
 	}
 
-	public Wire addWire(Node tail, P single, Node head, boolean transitive) {
+	public Wire addWire(Node tail, BundlePackage single, Node head, boolean transitive) {
 		if (tail == null) {
 			throw new NullPointerException("No tail.");
 		}
@@ -246,7 +247,7 @@ public class ResolutionGraph<V, P> implements Iterable<ResolutionGraph<V, P>.Nod
 		nodes.forEach((v, n) -> n.checkCycles());
 	}
 
-	public Node getNode(V v) {
+	public Node getNode(BundleWiring v) {
 		return nodes.get(v);
 	}
 	

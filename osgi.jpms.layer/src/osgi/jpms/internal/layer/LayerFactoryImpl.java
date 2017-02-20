@@ -160,7 +160,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final WriteLock layersWrite;
 	private final ReadLock layersRead;
 	private final AtomicLong nextLayerId = new AtomicLong(0);
-	private final ResolutionGraph<BundleWiring, BundlePackage> graph = new ResolutionGraph<>();
+	private final ResolutionGraph graph = new ResolutionGraph();
 	private final BundleWiringPrivates privatesCache;
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
 	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
@@ -303,7 +303,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}
 	}
 
-	private Module createModule(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
+	private Module createModule(ResolutionGraph.Node n) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
 			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n), true);
@@ -312,7 +312,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			try {
 				if (canBuildModuleHierarchy(n)) {
 					Set<Module> dependsOn = new HashSet<>();
-					for (ResolutionGraph<BundleWiring, BundlePackage>.Node d : n.dependsOn()) {
+					for (ResolutionGraph.Node d : n.dependsOn()) {
 						dependsOn.add(createModule(d));
 					}
 					List<Configuration> configs = new ArrayList<>(dependsOn.size());
@@ -413,7 +413,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		System.out.println("Time to addReadsNest: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - addReadsNestStart), TimeUnit.NANOSECONDS));
 	}
 
-	static boolean canBuildModuleHierarchy(ResolutionGraph<BundleWiring, BundlePackage>.Node n) {
+	static boolean canBuildModuleHierarchy(ResolutionGraph.Node n) {
 		return !(n.hasCycleSources() || n.hasSplitSources());
 	}
 
@@ -423,8 +423,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		System.out.println("Time addToGraph: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startAddToGraph), TimeUnit.NANOSECONDS));
 
 		long startAddWires = System.nanoTime();
-		for (Iterator<ResolutionGraph<BundleWiring, BundlePackage>.Node> nodes = graph.iterator(); nodes.hasNext();) {
-			ResolutionGraph<BundleWiring, BundlePackage>.Node n = nodes.next();
+		for (Iterator<ResolutionGraph.Node> nodes = graph.iterator(); nodes.hasNext();) {
+			ResolutionGraph.Node n = nodes.next();
 			if (!currentWirings.contains(n.getValue()) && n.getValue().getBundle().getBundleId() != 0) {
 				nodes.remove();
 			} else {
@@ -438,13 +438,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		System.out.println("Time populateSources: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startPopulateSources), TimeUnit.NANOSECONDS));
 	}
 
-	private void addWires(ResolutionGraph<BundleWiring, BundlePackage>.Node tail) {
+	private void addWires(ResolutionGraph.Node tail) {
 		if (tail.isPopulated()) {
 			return;
 		}
 		List<BundleWire> pkgWires = tail.getValue().getRequiredWires(PackageNamespace.PACKAGE_NAMESPACE);
 		for (BundleWire pkgWire : pkgWires) {
-			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(pkgWire.getProviderWiring());
+			ResolutionGraph.Node head = graph.getNode(pkgWire.getProviderWiring());
 			// head will be null for boot modules because we do not map them into real JPMS modules
 			if (head == null) {
 				if (pkgWire.getCapability().getAttributes().get(LayerFactoryImpl.BOOT_JPMS_MODULE) != null) {
@@ -457,7 +457,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}
 		List<BundleWire> bundleWires = tail.getValue().getRequiredWires(BundleNamespace.BUNDLE_NAMESPACE);
 		for (BundleWire bundleWire : bundleWires) {
-			ResolutionGraph<BundleWiring, BundlePackage>.Node head = graph.getNode(bundleWire.getProviderWiring());
+			ResolutionGraph.Node head = graph.getNode(bundleWire.getProviderWiring());
 			if (head == null) {
 				// head will be null for boot modules because we do not map them into real JPMS modules
 				if (bundleWire.getCapability().getAttributes().get(LayerFactoryImpl.BOOT_JPMS_MODULE) != null) {
