@@ -174,7 +174,8 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 
 			for(String uses : desc.uses()) {
 				builder.addRequirement(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE,
-						Map.of(Namespace.REQUIREMENT_RESOLUTION_DIRECTIVE, Namespace.RESOLUTION_OPTIONAL),
+						Map.of(Namespace.REQUIREMENT_RESOLUTION_DIRECTIVE, Namespace.RESOLUTION_OPTIONAL,
+								Namespace.REQUIREMENT_FILTER_DIRECTIVE, "(" + JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE + "=" + uses + ")"),
 						Map.of(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE, uses));
 			}
 			return builder;
@@ -255,12 +256,34 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 						exportPackages.append(", ");
 					}
 					exportPackages.append(exports.source());
-					exportPackages.append("; mandatory:=" + LayerFactoryImpl.BOOT_JPMS_MODULE + "; " + LayerFactoryImpl.BOOT_JPMS_MODULE + "=true");
+					exportPackages.append("; mandatory:=").append(LayerFactoryImpl.BOOT_JPMS_MODULE);
+					exportPackages.append("; ").append(LayerFactoryImpl.BOOT_JPMS_MODULE).append("=true");
 				}
 			}
 			if (exportPackages.length() > 0) {
 				mainAttrs.putValue(Constants.EXPORT_PACKAGE, exportPackages.toString());
 			}
+
+			StringBuilder provideCapability = new StringBuilder();
+			for(Provides provides : module.getDescriptor().provides()) {
+				if (provideCapability.length() > 0) {
+					provideCapability.append(", ");
+				}
+				provideCapability.append(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).append("; ");
+				provideCapability.append(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).append("=").append(provides.service()).append("; ");
+				
+				provideCapability.append(JpmsServiceNamespace.CAPABILITY_PROVIDES_WITH).append(":List<String>").append("=\"");
+				for (String provider : provides.providers()) {
+					provideCapability.append(provider).append(',');
+				}
+				provideCapability.setLength(provideCapability.length() - 1);
+				provideCapability.append('\"');
+				provideCapability.append("; ").append(LayerFactoryImpl.BOOT_JPMS_MODULE).append("=true");
+			}
+			if (provideCapability.length() > 0) {
+				mainAttrs.putValue(Constants.PROVIDE_CAPABILITY, provideCapability.toString());
+			}
+
 			mainAttrs.putValue(Constants.REQUIRE_BUNDLE, Constants.SYSTEM_BUNDLE_SYMBOLICNAME);
 
 			ByteArrayOutputStream bytes = new ByteArrayOutputStream();

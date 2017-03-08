@@ -166,7 +166,7 @@ public class NodeFinder implements ModuleFinder {
 				}
 		);
 
-		node.getValue().getRequirements(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
+		node.getValue().getRevision().getRequirements(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE).forEach(
 				(u) -> builder.uses(
 						(String) u.getAttributes().get(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE))
 		);

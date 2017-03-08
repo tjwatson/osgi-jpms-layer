@@ -183,7 +183,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	public LayerFactoryImpl(Activator activator, BundleContext context) {
 		this.activator = activator;
 		this.context = context;
+		long startTime = System.nanoTime();
 		privatesCache = loadPrivatesCache(context, activator);
+		System.out.println("Time loadPrivatesCache: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startTime), TimeUnit.NANOSECONDS));
 		Bundle systemBundle = context.getBundle(Constants.SYSTEM_BUNDLE_LOCATION);
 		fwkWiring = systemBundle.adapt(FrameworkWiring.class);
 		ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
@@ -198,21 +200,21 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private static BundleWiringPrivates loadPrivatesCache(BundleContext context, Activator activator) {
 		File cacheFile = context.getDataFile(CACHE_FILE);
 		if (cacheFile.exists()) {
-		ObjectInputStream ois = null;
-		try {
-			ois = new ObjectInputStream(new FileInputStream(cacheFile));
-			return (BundleWiringPrivates) ois.readObject();
-		} catch (IOException | ClassNotFoundException e) {
-			activator.logError("Failed to load privates cache.", e);
-		} finally {
-			if (ois != null) {
-				try {
-					ois.close();
-				} catch (IOException e) {
-					// ignore
+			ObjectInputStream ois = null;
+			try {
+				ois = new ObjectInputStream(new FileInputStream(cacheFile));
+				return (BundleWiringPrivates) ois.readObject();
+			} catch (IOException | ClassNotFoundException e) {
+				activator.logError("Failed to load privates cache.", e);
+			} finally {
+				if (ois != null) {
+					try {
+						ois.close();
+					} catch (IOException e) {
+						// ignore
+					}
 				}
 			}
-		}
 		}
 		return new BundleWiringPrivates();
 	}
@@ -292,8 +294,10 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			addToResolutionGraph(currentWirings);
 
 			long moduleCreateStart = System.nanoTime();
+			long[] classLoaderTime = new long[1];
 			// create modules for each node in the graph
-			graph.forEach((n) -> createModule(n));
+			graph.forEach((n) -> createModule(n, classLoaderTime));
+			System.out.println("Time to create class loaders: " + TimeUnit.MILLISECONDS.convert(classLoaderTime[0], TimeUnit.NANOSECONDS));
 			System.out.println("Time to create modules: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - moduleCreateStart), TimeUnit.NANOSECONDS));
 
 			addReadsNest(wiringToModule);
@@ -303,7 +307,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}
 	}
 
-	private Module createModule(ResolutionGraph.Node n) {
+	private Module createModule(ResolutionGraph.Node n, long[] totalTime) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
 			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n), true);
@@ -313,7 +317,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				if (canBuildModuleHierarchy(n)) {
 					Set<Module> dependsOn = new HashSet<>();
 					for (ResolutionGraph.Node d : n.dependsOn()) {
-						dependsOn.add(createModule(d));
+						dependsOn.add(createModule(d, totalTime));
 					}
 					List<Configuration> configs = new ArrayList<>(dependsOn.size());
 					layers = new ArrayList<>(dependsOn.size());
@@ -358,7 +362,14 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 						(name) -> {
 							return Optional.ofNullable(
 									finderName.equals(name) ? n.getValue() : null).map(
-											(w) -> {return w.getClassLoader();}).get();
+											(w) -> {
+												long startTime = System.nanoTime();
+												try {
+													return w.getClassLoader();
+												} finally {
+													totalTime[0] += (System.nanoTime() - startTime);
+												}
+											}).get();
 						}
 				);
 				Layer layer = controller.layer();
@@ -466,6 +477,19 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				}
 			}
 			graph.addWire(tail, null, head, BundleNamespace.VISIBILITY_REEXPORT.equals(bundleWire.getRequirement().getDirectives().get(BundleNamespace.REQUIREMENT_VISIBILITY_DIRECTIVE)));
+		}
+
+		List<BundleWire> serviceWires = tail.getValue().getRequiredWires(JpmsServiceNamespace.JPMS_SERVICE_NAMESPACE);
+		for (BundleWire serviceWire : serviceWires) {
+			ResolutionGraph.Node head = graph.getNode(serviceWire.getProviderWiring());
+			if (head == null) {
+				// head will be null for boot modules because we do not map them into real JPMS modules
+				if (serviceWire.getCapability().getAttributes().get(LayerFactoryImpl.BOOT_JPMS_MODULE) != null) {
+					// wires to boot modules are ignored
+					continue;
+				}
+			}
+			graph.addServiceDepenency(tail, head);
 		}
 	}
 

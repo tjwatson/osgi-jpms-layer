@@ -37,6 +37,7 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 		private final Set<Node> dependsOn;
 		private final Set<Node> transitives;
 		private final Set<Wire> requiredWires;
+		private final Set<Node> serviceDeps;
 		private boolean sourcesPopulated = false;
 		private boolean checkedCycles = false;
 		private boolean hasSplitSources = false;
@@ -51,6 +52,7 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 			this.requiredWires = new HashSet<>();
 			this.dependsOn = new HashSet<>();
 			this.transitives = new HashSet<>();
+			this.serviceDeps = new HashSet<>();
 		}
 		public BundleWiring getValue() {
 			return v;
@@ -128,6 +130,11 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 						transitives.add(wire.getHead());
 					}
 				}
+			}
+
+			// populate service dependencies
+			for (Node provider : serviceDeps) {
+				dependsOn.add(provider);
 			}
 		}
 
@@ -240,6 +247,10 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 		Wire wire = new Wire(tail, single, head, transitive);
 		tail.requiredWires.add(wire);
 		return wire;
+	}
+
+	public void addServiceDepenency(Node tail, Node head) {
+		tail.serviceDeps.add(head);
 	}
 
 	public void populateSources() {
