@@ -143,11 +143,24 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 				return;
 			}
 			checkedCycles = true;
-			dependsOn.forEach((n) ->{
-				if (n.dependsOn.contains(this)) {
-					hasCycleSources = true;
+			if (detectCycle(new HashSet<>(), this, this.dependsOn)) {
+				hasCycleSources = true;
+			}
+		}
+
+		boolean detectCycle(Set<Node> visited, Node start, Set<Node> dependencies) {
+			if (dependencies.contains(start)) {
+				return true;
+			} else {
+				for (Node dependency : dependencies) {
+					if (visited.add(dependency)) {
+						if (detectCycle(visited, start, dependency.dependsOn)) {
+							return true;
+						}
+					}
 				}
-			});
+			}
+			return false;
 		}
 
 		private void addToSources(BundlePackage p, Node node) {
