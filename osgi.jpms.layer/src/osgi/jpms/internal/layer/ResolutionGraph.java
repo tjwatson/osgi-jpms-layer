@@ -110,10 +110,13 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 			}
 
 			Set<BundlePackage> singles = new HashSet<>();
+			Set<Node> visited = new HashSet<>();
 			for (Wire w : requiredWires) {
 				if (w.getSingle() != null) {
+					// record single source import-package to remove the privates next
 					singles.add(w.getSingle());
-					w.getHead().addSingleSource(this, w.getSingle(), new HashSet<>());
+					// treat each wire as a require wire because that is all JPMS understands
+					w.getHead().addMultiSource(this, visited);
 				}
 			}
 
@@ -125,7 +128,7 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 
 			for (Wire wire : requiredWires) {
 				if (wire.getSingle() == null) {
-					wire.getHead().addMultiSource(this, singles);
+					wire.getHead().addMultiSource(this, visited);
 					if (wire.isTransitive()) {
 						transitives.add(wire.getHead());
 					}
@@ -193,19 +196,20 @@ public class ResolutionGraph implements Iterable<ResolutionGraph.Node>{
 			}
 		}
 
-		private void addMultiSource(Node tail, Set<BundlePackage> singles) {
+		private void addMultiSource(Node tail, Set<Node> visited) {
+			if (!visited.add(this)) {
+				return;
+			}
 			for (BundlePackage p : provides) {
-				if (!singles.contains(p)) {
-					addSingleSource(tail, p, new HashSet<>());
-				}
+				addSingleSource(tail, p, new HashSet<>());
 			}
 			for (Wire w : requiredWires) {
 				if (w.getSingle() != null) {
 					if (substitutes.contains(w.getSingle())) {
-						w.getHead().addSingleSource(tail, w.getSingle(), new HashSet<>());
+						w.getHead().addMultiSource(tail, visited);
 					}
 				} else if (w.isTransitive()) {
-					w.getHead().addMultiSource(tail, singles);
+					w.getHead().addMultiSource(tail, visited);
 				}
 			}
 		}
