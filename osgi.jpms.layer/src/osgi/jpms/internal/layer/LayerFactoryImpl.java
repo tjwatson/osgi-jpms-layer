@@ -43,7 +43,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -163,21 +162,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final ResolutionGraph graph = new ResolutionGraph();
 	private final BundleWiringPrivates privatesCache;
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
-	private Map<BundleWiring, Module> wiringToModule = new TreeMap<>((w1, w2) ->{
-		String n1 = w1.getRevision().getSymbolicName();
-		String n2 = w2.getRevision().getSymbolicName();
-		n1 = n1 == null ? "" : n1;
-		n2 = n2 == null ? "" : n2;
-		int nameCompare = n1.compareTo(n2);
-		if (nameCompare != 0) {
-			return nameCompare;
-		}
-		int versionCompare = -(w1.getRevision().getVersion().compareTo(w1.getRevision().getVersion()));
-		if (versionCompare != 0) {
-			return versionCompare;
-		}
-		return w1.getBundle().compareTo(w2.getBundle());
-	});
+	private Map<BundleWiring, Module> wiringToModule = new HashMap<>();
 	private final HashMap<Module, Controller> controllers = new HashMap<>(); 
 
 	public LayerFactoryImpl(Activator activator, BundleContext context) {
@@ -293,18 +278,81 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 
 			addToResolutionGraph(currentWirings);
 
+			int numModules = wiringToModule.size();
 			long moduleCreateStart = System.nanoTime();
 			long[] classLoaderTime = new long[1];
+
 			// create modules for each node in the graph
 			graph.forEach((n) -> createModule(n, classLoaderTime));
+
+			// create a single layer for all bundles
+			// createdLayers = createSingleLayer();
 			System.out.println("Time to create class loaders: " + TimeUnit.MILLISECONDS.convert(classLoaderTime[0], TimeUnit.NANOSECONDS));
 			System.out.println("Time to create modules: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - moduleCreateStart), TimeUnit.NANOSECONDS));
 
-			addReadsNest(wiringToModule);
+			if (numModules != wiringToModule.size()) {
+				addReadsNest(wiringToModule);
+			}
 		} finally {
 			layersWrite.unlock();
 			System.out.println("Total Time to create bundle layers: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - start), TimeUnit.NANOSECONDS));
 		}
+	}
+
+	private boolean createSingleLayer() {
+		Map<String, ModuleFinder> finders = new HashMap<>();
+		Map<String, ResolutionGraph.Node> nodes = new HashMap<>();
+		for (ResolutionGraph.Node n : graph) {
+			if (!wiringToModule.containsKey(n.getValue())) {
+				// We map using the nodeFinder name because it may be munged to fit into JPMS rules for names.
+				NodeFinder nodeFinder = new NodeFinder(activator, n, false, false);
+				// note this does not allow duplicate BSNs and it is random which wins
+				finders.put(nodeFinder.name, nodeFinder);
+				nodes.put(nodeFinder.name, n);
+			}
+		}
+		if (finders.isEmpty()) {
+			return false;
+		}
+		ModuleFinder aggregateFinder = new AggregateFinder(finders);
+		Configuration config = Layer.boot().configuration().resolve(aggregateFinder, ModuleFinder.of(), finders.keySet());
+		List<Layer> layers = Collections.singletonList(Layer.boot());
+		Controller controller = null;
+		try {
+			controller = Layer.defineModules(
+					config,
+					layers,
+					// Map the module names to the wiring class loaders
+					// NOTE we should only have one module in this layer
+					(name) -> {
+						return Optional.ofNullable(
+								Optional.ofNullable(nodes.get(name)).map(
+										(n) -> n.getValue()
+								).map(
+										(w) -> w.getClassLoader()).get()
+								).get();
+					}
+			);
+			for (Module m :controller.layer().modules()) {
+				saveController(m, controller);
+				wiringToModule.put(nodes.get(m.getName()).getValue(), m);
+			}
+		} catch (LayerInstantiationException e) {
+			// The most likely cause is because we have loaded classes from the 
+			// class loader before defining the module.
+			// This is possible if the jpms support fragment is installed after
+			// bundle code has been run, for example a provisioning agent.
+			// We fall back to using the unnamed module for the bundle class loader
+			for (ResolutionGraph.Node n : nodes.values()) {
+				Module m = n.getValue().getClassLoader().getUnnamedModule();
+				if (!wiringToModule.containsKey(n.getValue())) {
+					activator.logError("Falling back to unnamed module for: " + n.getValue().getRevision().getSymbolicName(), e);
+					wiringToModule.put(n.getValue(), m);
+				}
+			}
+		}
+
+		return true;
 	}
 
 	private Module createModule(ResolutionGraph.Node n, long[] totalTime) {
