@@ -19,6 +19,7 @@
 package osgi.jpms.internal.layer;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Module;
 
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;
@@ -40,13 +41,14 @@ public class Activator implements BundleActivator {
 	public void start(BundleContext context) {
 		logErrors = Boolean.parseBoolean(context.getProperty("osgi.jpms.layer.log.errors"));
 		// Check that the launcher created a layer for the framework
-		if (!Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(getClass().getModule().getName())) {
+		Module systemModule = context.getClass().getModule();
+		if (!Constants.SYSTEM_BUNDLE_SYMBOLICNAME.equals(systemModule.getName())) {
 			throw new IllegalStateException("The framework launcher has not setup the system.bundle module for the framework implementation: " + getClass().getModule());
 		}
 		logService = new ServiceTracker<>(context, LOG_SERVICE, null);
 		logService.open();
 		// Create the LayerFactory implementation and register it
-		factory = new LayerFactoryImpl(this, context);
+		factory = new LayerFactoryImpl(this, context, systemModule);
 		// The factory is a bundle listener to keep track of resolved bundles
 		context.addBundleListener(factory);
 		// The factory is also a WovenClassListener to intercept bundle class loaders before

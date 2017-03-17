@@ -151,7 +151,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	};
 
 	public static final String BOOT_JPMS_MODULE = "equinox.boot.jpms.module";
-	private final static Module systemModule = LayerFactoryImpl.class.getModule().getLayer().findModule(Constants.SYSTEM_BUNDLE_SYMBOLICNAME).get();
+	private final Module systemModule;
 	private final static String CACHE_FILE = "osgi.jpms.layer/privates.cache";
 	private final Activator activator;
 	private final BundleContext context;
@@ -165,9 +165,10 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private Map<BundleWiring, Module> wiringToModule = new HashMap<>();
 	private final HashMap<Module, Controller> controllers = new HashMap<>(); 
 
-	public LayerFactoryImpl(Activator activator, BundleContext context) {
+	public LayerFactoryImpl(Activator activator, BundleContext context, Module systemModule) {
 		this.activator = activator;
 		this.context = context;
+		this.systemModule = systemModule;
 		long startTime = System.nanoTime();
 		privatesCache = loadPrivatesCache(context, activator);
 		System.out.println("Time loadPrivatesCache: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - startTime), TimeUnit.NANOSECONDS));
@@ -243,6 +244,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				if (wiring != null && wiring.isInUse()) {
 					wirings.add(wiring);
 				}
+				if (revision.getBundle().getBundleId() == 0) {
+					// also store the system.bundle fragments because they may have exports unknown to JPMS
+					List<BundleWire> hostWires = wiring.getProvidedWires(HostNamespace.HOST_NAMESPACE);
+					for (BundleWire hostWire : hostWires) {
+						wirings.add(hostWire.getRequirerWiring());
+					}
+				}
 			}
 		}
 		return wirings;
@@ -283,10 +291,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			long[] classLoaderTime = new long[1];
 
 			// create modules for each node in the graph
-			graph.forEach((n) -> createModule(n, classLoaderTime));
+			//graph.forEach((n) -> createModule(n, classLoaderTime, true));
 
 			// create a single layer for all bundles
-			// createdLayers = createSingleLayer();
+			createSingleLayer(classLoaderTime);
+
 			System.out.println("Time to create class loaders: " + TimeUnit.MILLISECONDS.convert(classLoaderTime[0], TimeUnit.NANOSECONDS));
 			System.out.println("Time to create modules: " + TimeUnit.MILLISECONDS.convert((System.nanoTime() - moduleCreateStart), TimeUnit.NANOSECONDS));
 
@@ -299,7 +308,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		}
 	}
 
-	private boolean createSingleLayer() {
+	private boolean createSingleLayer(long[] classLoaerCreateTime) {
 		Map<String, ModuleFinder> finders = new HashMap<>();
 		Map<String, ResolutionGraph.Node> nodes = new HashMap<>();
 		for (ResolutionGraph.Node n : graph) {
@@ -329,7 +338,18 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 								Optional.ofNullable(nodes.get(name)).map(
 										(n) -> n.getValue()
 								).map(
-										(w) -> w.getClassLoader()).get()
+										(w) -> {
+											long startTime = System.nanoTime();
+											try {
+												if (isFragment(w)) {
+													// assume fragments are for the system.bundle
+													return systemModule.getClassLoader();
+												}
+												return w.getClassLoader();
+											} finally {
+												classLoaerCreateTime[0] += (System.nanoTime() - startTime);
+											}
+										}).get()
 								).get();
 					}
 			);
@@ -355,48 +375,53 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		return true;
 	}
 
-	private Module createModule(ResolutionGraph.Node n, long[] totalTime) {
+	private Module createModule(ResolutionGraph.Node n, long[] classLoaderCreateTime, boolean createHierarchy) {
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
-			NodeFinder finder = new NodeFinder(activator, n, canBuildModuleHierarchy(n), true);
+			NodeFinder finder = createHierarchy ? new NodeFinder(activator, n, canBuildModuleHierarchy(n), true) : new NodeFinder(activator, n, false, false);
 			Configuration config;
 			List<Layer> layers;
-			try {
-				if (canBuildModuleHierarchy(n)) {
-					Set<Module> dependsOn = new HashSet<>();
-					for (ResolutionGraph.Node d : n.dependsOn()) {
-						dependsOn.add(createModule(d, totalTime));
-					}
-					List<Configuration> configs = new ArrayList<>(dependsOn.size());
-					layers = new ArrayList<>(dependsOn.size());
-					for (Module d : dependsOn) {
-						Layer l = d.getLayer();
-						if (l != null) {
-							// unnamed modules have no layers.
-							// note that a null layer should result in a resolution error below
-							layers.add(l);
-							configs.add(l.configuration());
+			if (!createHierarchy) {
+				config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+				layers = Collections.singletonList(Layer.boot());
+			} else {
+				try {
+					if (canBuildModuleHierarchy(n)) {
+						Set<Module> dependsOn = new HashSet<>();
+						for (ResolutionGraph.Node d : n.dependsOn()) {
+							dependsOn.add(createModule(d, classLoaderCreateTime, createHierarchy));
 						}
+						List<Configuration> configs = new ArrayList<>(dependsOn.size());
+						layers = new ArrayList<>(dependsOn.size());
+						for (Module d : dependsOn) {
+							Layer l = d.getLayer();
+							if (l != null) {
+								// unnamed modules have no layers.
+								// note that a null layer should result in a resolution error below
+								layers.add(l);
+								configs.add(l.configuration());
+							}
+						}
+	
+						configs.add(Layer.boot().configuration());
+						layers.add(Layer.boot());
+	
+						config = Configuration.resolve(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
+					} else {
+						String cause = n.hasSplitSources() ? " split packages" : "";
+						cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
+						activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
+						// try without module Hierarchy
+						config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+						layers = Collections.singletonList(Layer.boot());
 					}
-
-					configs.add(Layer.boot().configuration());
-					layers.add(Layer.boot());
-
-					config = Configuration.resolve(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
-				} else {
-					String cause = n.hasSplitSources() ? " split packages" : "";
-					cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
-					activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
-					// try without module Hierarchy
+				} catch (ResolutionException e) {
+					activator.logError("Resolution error creating layer for: " + finder.name, e);
+					// well something blew up; try without module hierarchy and boot modules
+					finder = new NodeFinder(activator, n, false, false);
 					config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
 					layers = Collections.singletonList(Layer.boot());
 				}
-			} catch (ResolutionException e) {
-				activator.logError("Resolution error creating layer for: " + finder.name, e);
-				// well something blew up; try without module hierarchy and boot modules
-				finder = new NodeFinder(activator, n, false, false);
-				config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-				layers = Collections.singletonList(Layer.boot());
 			}
 
 			final String finderName = finder.name;
@@ -413,9 +438,13 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 											(w) -> {
 												long startTime = System.nanoTime();
 												try {
+													if (isFragment(w)) {
+														// assume fragments are for the system.bundle
+														return systemModule.getClassLoader();
+													}
 													return w.getClassLoader();
 												} finally {
-													totalTime[0] += (System.nanoTime() - startTime);
+													classLoaderCreateTime[0] += (System.nanoTime() - startTime);
 												}
 											}).get();
 						}
@@ -428,7 +457,12 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				// This is possible if the jpms support fragment is installed after
 				// bundle code has been run, for example a provisioning agent.
 				// We fall back to using the unnamed module for the bundle class loader
-				m = n.getValue().getClassLoader().getUnnamedModule();
+				if (isFragment(n.getValue())) {
+					// assume this is the system.bundle fragment
+					m = systemModule.getClassLoader().getUnnamedModule();
+				} else {
+					m = n.getValue().getClassLoader().getUnnamedModule();
+				}
 				activator.logError("Falling back to unnamed module for: " + n.getValue().getRevision().getSymbolicName(), e);
 			}
 			saveController(m, controller);
@@ -564,12 +598,29 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		return results;
 	}
 
-	private static Set<BundlePackage> getExports(BundleWiring wiring) {
+	private Set<BundlePackage> getExports(BundleWiring wiring) {
 		Set<BundlePackage> results = new HashSet<>();
-		for (BundleCapability export : wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
-			results.add(BundlePackage.createExportPackage(export));
+		if (isFragment(wiring)) {
+			Set<String> systemPackages = systemModule.getDescriptor().packages();
+			// assume this is for the system.bundle
+			BundleWiring systemWiring = wiring.getRequiredWires(HostNamespace.HOST_NAMESPACE).get(0).getProviderWiring();
+			for (BundleCapability export : systemWiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+				if (!systemPackages.contains(export.getAttributes().get(PackageNamespace.PACKAGE_NAMESPACE))) {
+					if (export.getRevision().equals(wiring.getRevision())) {
+						results.add(BundlePackage.createExportPackage(export));
+					}
+				}
+			}
+		} else {
+			for (BundleCapability export : wiring.getCapabilities(PackageNamespace.PACKAGE_NAMESPACE)) {
+				results.add(BundlePackage.createExportPackage(export));
+			}
 		}
 		return results;
+	}
+
+	private static boolean isFragment(BundleWiring wiring) {
+		return (wiring.getRevision().getTypes() & BundleRevision.TYPE_FRAGMENT) != 0;
 	}
 
 	private NamedLayer createLayer(LoaderType type, String name, Set<Path> paths, Set<String> roots, ClassLoader parent, Function<String, ClassLoader> mappedLoaders) {
