@@ -35,6 +35,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -76,6 +77,12 @@ import org.osgi.resource.Resource;
 import osgi.jpms.layer.LayerFactory;
 
 public class LayerFactoryImpl implements LayerFactory, WovenClassListener, WeavingHook, SynchronousBundleListener, FrameworkListener {
+
+	enum LayerType {
+		OneBundlePerLayerWithHierarchy,
+		OneBundlePerLayerFlat,
+		MultiBundlePerLayerFlat;
+	}
 
 	class NamedLayerImpl implements NamedLayer {
 		final Layer layer;
@@ -163,9 +170,12 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	private final BundleWiringPrivates privatesCache;
 	private Map<Module, Collection<NamedLayerImpl>> moduleToNamedLayers = new HashMap<>();
 	private Map<BundleWiring, Module> wiringToModule = new HashMap<>();
-	private final HashMap<Module, Controller> controllers = new HashMap<>(); 
+	private final HashMap<Module, Controller> controllers = new HashMap<>();
+	private final LayerType layerType;
 
 	public LayerFactoryImpl(Activator activator, BundleContext context, Module systemModule) {
+		String layerTypeProp = context.getProperty("osgi.jpms.layer.type");
+		this.layerType = layerTypeProp == null ? LayerType.OneBundlePerLayerWithHierarchy : LayerType.valueOf(layerTypeProp);
 		this.activator = activator;
 		this.context = context;
 		this.systemModule = systemModule;
@@ -291,7 +301,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			long[] classLoaderTime = new long[1];
 
 			// create modules for each node in the graph
-			//graph.forEach((n) -> createModule(n, classLoaderTime, true));
+			if (EnumSet.of(LayerType.OneBundlePerLayerFlat, LayerType.OneBundlePerLayerWithHierarchy).contains(layerType)) {
+				graph.forEach((n) -> createModule(n, classLoaderTime));
+			}
 
 			// create a single layer for all bundles
 			createSingleLayer(classLoaderTime);
@@ -375,7 +387,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		return true;
 	}
 
-	private Module createModule(ResolutionGraph.Node n, long[] classLoaderCreateTime, boolean createHierarchy) {
+	private Module createModule(ResolutionGraph.Node n, long[] classLoaderCreateTime) {
+		boolean createHierarchy = layerType.equals(LayerType.OneBundlePerLayerWithHierarchy);
 		Module m = wiringToModule.get(n.getValue());
 		if (m == null) {
 			NodeFinder finder = createHierarchy ? new NodeFinder(activator, n, canBuildModuleHierarchy(n), true) : new NodeFinder(activator, n, false, false);
@@ -389,7 +402,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 					if (canBuildModuleHierarchy(n)) {
 						Set<Module> dependsOn = new HashSet<>();
 						for (ResolutionGraph.Node d : n.dependsOn()) {
-							dependsOn.add(createModule(d, classLoaderCreateTime, createHierarchy));
+							dependsOn.add(createModule(d, classLoaderCreateTime));
 						}
 						List<Configuration> configs = new ArrayList<>(dependsOn.size());
 						layers = new ArrayList<>(dependsOn.size());
