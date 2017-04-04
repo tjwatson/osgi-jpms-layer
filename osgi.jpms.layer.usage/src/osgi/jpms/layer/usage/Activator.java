@@ -1,8 +1,6 @@
 package osgi.jpms.layer.usage;
 
 import java.io.File;
-import java.lang.reflect.Layer;
-import java.lang.reflect.Module;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -89,7 +87,7 @@ public class Activator implements BundleActivator {
 	}
 
 	@SuppressWarnings("unchecked")
-	private void tryUseFunctions(Layer layer) {
+	private void tryUseFunctions(ModuleLayer layer) {
 		@SuppressWarnings("rawtypes")
 		ServiceLoader<Function> functions = ServiceLoader.load(layer, Function.class);
 		for (Function<String, Callable<String>> function : functions) {
@@ -107,7 +105,7 @@ public class Activator implements BundleActivator {
 		}
 	}
 
-	private void tryLoadClasses(Layer layer) {
+	private void tryLoadClasses(ModuleLayer layer) {
 		for (Module jpmsModule : layer.modules()) {
 			System.out.println("  " + jpmsModule.getDescriptor());
 			tryLoadClass(layer, jpmsModule.getName(), jpmsModule.getName() + ".C");
@@ -117,7 +115,7 @@ public class Activator implements BundleActivator {
 		}
 	}
 
-	private void tryUseFactory(Layer layer, String moduleName, String className) {
+	private void tryUseFactory(ModuleLayer layer, String moduleName, String className) {
 		try {
 			@SuppressWarnings("unchecked")
 			Class<Callable<String>> c = (Class<Callable<String>>) layer.findLoader(moduleName).loadClass(className);
@@ -129,7 +127,7 @@ public class Activator implements BundleActivator {
 		}
 	}
 
-	private void tryLoadClass(Layer layer, String moduleName, String className) {
+	private void tryLoadClass(ModuleLayer layer, String moduleName, String className) {
 		try {
 			Class<?> c = layer.findLoader(moduleName).loadClass(className);
 			System.out.println("    SUCCESS: " + c + " from->" + c.getModule() + " SUPER: " + c.getSuperclass() + " from->" + c.getSuperclass().getModule());

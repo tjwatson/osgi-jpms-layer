@@ -30,7 +30,6 @@ import java.lang.module.ModuleDescriptor.Provides;
 import java.lang.module.ModuleDescriptor.Requires;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
-import java.lang.reflect.Layer;
 import java.util.Collections;
 import java.util.Dictionary;
 import java.util.HashMap;
@@ -44,7 +43,6 @@ import java.util.jar.Attributes;
 import java.util.jar.JarOutputStream;
 import java.util.jar.Manifest;
 
-import org.eclipse.osgi.container.Module;
 import org.eclipse.osgi.container.ModuleContainerAdaptor.ModuleEvent;
 import org.eclipse.osgi.container.ModuleRevisionBuilder;
 import org.eclipse.osgi.internal.hookregistry.ActivatorHookFactory;
@@ -91,7 +89,7 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 		}
 
 		@Override
-		public ModuleRevisionBuilder adaptModuleRevisionBuilder(ModuleEvent operation, Module origin,
+		public ModuleRevisionBuilder adaptModuleRevisionBuilder(ModuleEvent operation, org.eclipse.osgi.container.Module origin,
 				ModuleRevisionBuilder builder) {
 			if (builder.getSymbolicName() == null) {
 				// only do this if this doesn't have a bsn
@@ -211,9 +209,9 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 		// keep track of the boot modules that should be installed
 		Set<String> bootModuleLocations = new HashSet<>();
 		// make sure all boot modules are installed
-		Set<java.lang.reflect.Module> bootModules = new TreeSet<java.lang.reflect.Module>((m1, m2) ->{return m1.getName().compareTo(m2.getName());});
-		bootModules.addAll(Layer.boot().modules());
-		for (java.lang.reflect.Module module : bootModules) {
+		Set<Module> bootModules = new TreeSet<Module>((m1, m2) ->{return m1.getName().compareTo(m2.getName());});
+		bootModules.addAll(ModuleLayer.boot().modules());
+		for (Module module : bootModules) {
 			bootModuleLocations.add(installBootModule(module, context));
 		}
 		Set<Bundle> refresh = new HashSet<>();
@@ -233,7 +231,7 @@ public class EquinoxJPMSSupport extends StorageHookFactory<Object, Object, Equin
 		}
 	}
 
-	private String installBootModule(java.lang.reflect.Module module, BundleContext context) throws IOException, BundleException {
+	private String installBootModule(Module module, BundleContext context) throws IOException, BundleException {
 		String bootLocation = bootModuleLocationPrefix + module.getName();
 		if (context.getBundle(bootLocation) == null) {
 			Manifest m = new Manifest();

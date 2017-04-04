@@ -25,7 +25,6 @@ import java.lang.module.ModuleDescriptor.Requires.Modifier;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReader;
 import java.lang.module.ModuleReference;
-import java.lang.reflect.Layer;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.text.CharacterIterator;
@@ -60,7 +59,7 @@ public class NodeFinder implements ModuleFinder {
 		// first, gather all unqualified packages and module names
 		Set<String> modules = new HashSet<>();
 		Set<String> packages = new HashSet<>();
-		Layer.boot().modules().forEach((m) -> {
+		ModuleLayer.boot().modules().forEach((m) -> {
 			modules.add(m.getName());
 			m.getDescriptor().exports().forEach((e) -> {
 				if (!e.isQualified()) {
@@ -71,7 +70,7 @@ public class NodeFinder implements ModuleFinder {
 
 		// second, gather all service names from unqualified packages
 		Set<String> services = new HashSet<>();
-		Layer.boot().modules().forEach((m) -> {
+		ModuleLayer.boot().modules().forEach((m) -> {
 			m.getDescriptor().provides().forEach((s) -> {
 				String service = s.service();
 				int lastDot = service.lastIndexOf('.');

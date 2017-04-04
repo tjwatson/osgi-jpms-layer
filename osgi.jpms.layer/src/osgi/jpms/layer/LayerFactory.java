@@ -18,8 +18,6 @@
  */
 package osgi.jpms.layer;
 
-import java.lang.reflect.Layer;
-import java.lang.reflect.Module;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
@@ -48,7 +46,7 @@ public interface LayerFactory {
 		 * is the layer containing modules representing OSGi bundles.
 		 * @return the JPMS layer
 		 */
-		public Layer getLayer();
+		public ModuleLayer getLayer();
 		/**
 		 * The layer name
 		 * @return the layer name

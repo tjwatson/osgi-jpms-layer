@@ -18,7 +18,6 @@
  */
 package jpms.test.b;
 
-import java.lang.reflect.Module;
 import java.util.concurrent.Callable;
 
 import bundle.test.a.ACallableFactory;

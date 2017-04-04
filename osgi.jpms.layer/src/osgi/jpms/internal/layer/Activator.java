@@ -19,7 +19,6 @@
 package osgi.jpms.internal.layer;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.Module;
 
 import org.osgi.framework.BundleActivator;
 import org.osgi.framework.BundleContext;

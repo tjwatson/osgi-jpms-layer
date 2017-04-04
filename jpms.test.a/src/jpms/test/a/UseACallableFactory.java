@@ -18,7 +18,6 @@
  */
 package jpms.test.a;
 
-import java.lang.reflect.Module;
 import java.util.concurrent.Callable;
 
 import bundle.test.a.ACallableFactory;
@@ -27,6 +26,12 @@ public class UseACallableFactory implements Callable<String> {
 
 	@Override
 	public String call() throws Exception {
+		try {
+			Class.forName("bundle.test.a.internal.Impl");
+			System.err.println("Should not have loaded internal class.");
+		} catch (ClassNotFoundException e) {
+			// expected
+		}
 		Callable<String> callable = new ACallableFactory().createCallable();
 		Module thisModule = getClass().getModule();
 		Module callableModule = callable.getClass().getModule();

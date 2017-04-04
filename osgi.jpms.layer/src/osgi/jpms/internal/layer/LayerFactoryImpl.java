@@ -24,13 +24,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+import java.lang.ModuleLayer.Controller;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ResolutionException;
-import java.lang.reflect.Layer;
-import java.lang.reflect.Layer.Controller;
-import java.lang.reflect.LayerInstantiationException;
-import java.lang.reflect.Module;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -85,17 +82,17 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 	}
 
 	class NamedLayerImpl implements NamedLayer {
-		final Layer layer;
+		final ModuleLayer layer;
 		final String name;
 		final long id = nextLayerId.getAndIncrement();
 		final AtomicReference<Consumer<Event>> consumers = new AtomicReference<>((e) -> {});
 		final AtomicReference<Boolean> isValid = new AtomicReference<>(true);
-		NamedLayerImpl(Layer layer, String name) {
+		NamedLayerImpl(ModuleLayer layer, String name) {
 			this.layer = layer;
 			this.name = name;
 		}
 		@Override
-		public Layer getLayer() {
+		public ModuleLayer getLayer() {
 			return layer;
 		}
 
@@ -336,11 +333,11 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			return false;
 		}
 		ModuleFinder aggregateFinder = new AggregateFinder(finders);
-		Configuration config = Layer.boot().configuration().resolve(aggregateFinder, ModuleFinder.of(), finders.keySet());
-		List<Layer> layers = Collections.singletonList(Layer.boot());
+		Configuration config = ModuleLayer.boot().configuration().resolve(aggregateFinder, ModuleFinder.of(), finders.keySet());
+		List<ModuleLayer> layers = Collections.singletonList(ModuleLayer.boot());
 		Controller controller = null;
 		try {
-			controller = Layer.defineModules(
+			controller = ModuleLayer.defineModules(
 					config,
 					layers,
 					// Map the module names to the wiring class loaders
@@ -393,10 +390,10 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 		if (m == null) {
 			NodeFinder finder = createHierarchy ? new NodeFinder(activator, n, canBuildModuleHierarchy(n), true) : new NodeFinder(activator, n, false, false);
 			Configuration config;
-			List<Layer> layers;
+			List<ModuleLayer> layers;
 			if (!createHierarchy) {
-				config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-				layers = Collections.singletonList(Layer.boot());
+				config = ModuleLayer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+				layers = Collections.singletonList(ModuleLayer.boot());
 			} else {
 				try {
 					if (canBuildModuleHierarchy(n)) {
@@ -407,7 +404,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 						List<Configuration> configs = new ArrayList<>(dependsOn.size());
 						layers = new ArrayList<>(dependsOn.size());
 						for (Module d : dependsOn) {
-							Layer l = d.getLayer();
+							ModuleLayer l = d.getLayer();
 							if (l != null) {
 								// unnamed modules have no layers.
 								// note that a null layer should result in a resolution error below
@@ -416,8 +413,8 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 							}
 						}
 	
-						configs.add(Layer.boot().configuration());
-						layers.add(Layer.boot());
+						configs.add(ModuleLayer.boot().configuration());
+						layers.add(ModuleLayer.boot());
 	
 						config = Configuration.resolve(finder, configs, ModuleFinder.of(), Collections.singleton(finder.name));
 					} else {
@@ -425,22 +422,22 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 						cause += n.hasCycleSources() ? ((cause.isEmpty() ? "" : " and") + " cycles") : "";
 						activator.logError("Could not attempt layer hierarchy for '" + finder.name + "' because of" + cause + ".", null);
 						// try without module Hierarchy
-						config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-						layers = Collections.singletonList(Layer.boot());
+						config = ModuleLayer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+						layers = Collections.singletonList(ModuleLayer.boot());
 					}
 				} catch (ResolutionException e) {
 					activator.logError("Resolution error creating layer for: " + finder.name, e);
 					// well something blew up; try without module hierarchy and boot modules
 					finder = new NodeFinder(activator, n, false, false);
-					config = Layer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
-					layers = Collections.singletonList(Layer.boot());
+					config = ModuleLayer.boot().configuration().resolve(finder, ModuleFinder.of(), Collections.singleton(finder.name));
+					layers = Collections.singletonList(ModuleLayer.boot());
 				}
 			}
 
 			final String finderName = finder.name;
 			Controller controller = null;
 			try {
-				controller = Layer.defineModules(
+				controller = ModuleLayer.defineModules(
 						config,
 						layers,
 						// Map the module names to the wiring class loaders
@@ -462,7 +459,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 											}).get();
 						}
 				);
-				Layer layer = controller.layer();
+				ModuleLayer layer = controller.layer();
 				m = layer.modules().iterator().next();
 			} catch (LayerInstantiationException e) {
 				// The most likely cause is because we have loaded classes from the 
@@ -503,7 +500,7 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 
 	private void addReadsNest(Map<BundleWiring, Module> wiringToModule) {
 		long addReadsNestStart = System.nanoTime();
-		Set<Module> bootModules = Layer.boot().modules();
+		Set<Module> bootModules = ModuleLayer.boot().modules();
 		Collection<Module> allBundleModules = wiringToModule.values();
 		// Not checking for existing edges for simplicity.
 		for (Module module : allBundleModules) {
@@ -653,9 +650,9 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 				}
 			}
 			List<Configuration> configs = new ArrayList<>(dependsOn.size() + 1);
-			List<Layer> layers = new ArrayList<>(dependsOn.size() + 1);
+			List<ModuleLayer> layers = new ArrayList<>(dependsOn.size() + 1);
 			for (Module d : dependsOn) {
-				Layer l = d.getLayer();
+				ModuleLayer l = d.getLayer();
 				layers.add(l);
 				configs.add(l.configuration());
 			}
@@ -664,16 +661,16 @@ public class LayerFactoryImpl implements LayerFactory, WovenClassListener, Weavi
 			configs.add(systemModule.getLayer().configuration());
 
 			Configuration config = Configuration.resolveAndBind(ModuleFinder.of(), configs, finder, roots);
-			Layer layer;
+			ModuleLayer layer;
 			switch (type) {
 				case OneLoader:
-					layer = Layer.defineModulesWithOneLoader(config, layers, parent).layer();
+					layer = ModuleLayer.defineModulesWithOneLoader(config, layers, parent).layer();
 					break;
 				case ManyLoaders :
-					layer = Layer.defineModulesWithManyLoaders(config, layers, parent).layer();
+					layer = ModuleLayer.defineModulesWithManyLoaders(config, layers, parent).layer();
 					break;
 				case MappedLoaders :
-					layer = Layer.defineModules(config, layers, mappedLoaders).layer();
+					layer = ModuleLayer.defineModules(config, layers, mappedLoaders).layer();
 					break;
 				default:
 					throw new IllegalArgumentException(type.toString());
