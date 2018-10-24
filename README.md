@@ -1,3 +1,6 @@
+# NOTICE
+This is my first attempt at an OSGi - JPMS inter-op.  To provide full OSGi support it ends up breaking lots of JPMS rules which force it to use a one-to-one mapping between Bundle and ModuleLayer.  This allows full control over the wiring of the modules to follow all the advanced rules of OSGi.  Unfortunately this largely negates any advantage to moving to the JPMS module system.  For example, you cannot create jlink images since all layers must be dynamically created at runtime.  It also suffers from performance concerns since resolving and creating all these ModuleLayers is not cheap.  This approach does allow additional module layers to be created on top for "real" Java modules but in the end I think this is the wrong approach.  Since then I have created a new project called Atomos (https://github.com/tjwatson/atomos) which plays more by the rules of JPMS and allows for things like creating a jlink image from a set of OSGi bundles.
+
 # osgi-jpms-layer
 Builds a jpms OSGi Bundle Layer which can have child Layers that depend on OSGi Bundles as jpms Modules
 
